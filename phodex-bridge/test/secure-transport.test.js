@@ -244,8 +244,31 @@ test("secure transport round-trips encrypted payloads after a trusted reconnect 
     }
   );
 
+  const androidEnvelope = encryptEnvelope(
+    {
+      payloadText: JSON.stringify({ id: "request-2", method: "thread/read", params: { threadId: "thread-1" } }),
+    },
+    phoneToMacKey,
+    "android",
+    1,
+    "session-2",
+    serverHello.keyEpoch
+  );
+  secureTransport.handleIncomingWireMessage(
+    JSON.stringify(androidEnvelope),
+    {
+      sendControlMessage(message) {
+        controlMessages.push(message);
+      },
+      onApplicationMessage(message) {
+        applicationMessages.push(message);
+      },
+    }
+  );
+
   assert.deepEqual(applicationMessages, [
     JSON.stringify({ id: "request-1", method: "thread/list", params: {} }),
+    JSON.stringify({ id: "request-2", method: "thread/read", params: { threadId: "thread-1" } }),
   ]);
 });
 

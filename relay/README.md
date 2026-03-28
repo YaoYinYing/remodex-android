@@ -7,9 +7,9 @@ The point of keeping this code in the repo is transparency: anyone forking Remod
 ## What It Does
 
 - accepts WebSocket connections at `/relay/{sessionId}`
-- pairs one Mac host with one live iPhone client for a session
+- pairs one Mac host with one live mobile client for a session
 - keeps an in-memory index of the current live session for each trusted Mac
-- resolves the current live session for a previously trusted iPhone through an authenticated HTTP lookup
+- resolves the current live session for a previously trusted mobile device through an authenticated HTTP lookup
 - forwards secure control messages and encrypted payloads between Mac and iPhone
 - exposes optional HTTP endpoints for push registration and run-completion alerts only when push is enabled explicitly
 - logs only connection metadata and payload sizes, not plaintext prompts or responses
@@ -105,12 +105,13 @@ Optional HTTP endpoints:
 
 The trusted-session resolve endpoint is intended for phones that have already completed the first QR bootstrap. It returns the current live session only after signature, nonce, and freshness checks pass.
 
-Push is disabled by default. Enable it only when you are ready to wire APNs and the bridge-side `REMODEX_PUSH_SERVICE_URL`, for example with `REMODEX_ENABLE_PUSH_SERVICE=true`.
+Push is disabled by default. Enable it only when you are ready to wire APNs/FCM and the bridge-side `REMODEX_PUSH_SERVICE_URL`, for example with `REMODEX_ENABLE_PUSH_SERVICE=true`.
 
 ## Deploy Notes
 
 - Keep the real relay base URL in private config such as `REMODEX_RELAY`, not in committed source.
 - Keep APNs credentials in private env vars or protected files (`REMODEX_APNS_*`).
+- Keep FCM service-account credentials in private env vars or protected files (`REMODEX_FCM_*`).
 - Leave `REMODEX_TRUST_PROXY` unset for direct/self-hosted installs. Set it to `true` only when a trusted reverse proxy is forwarding requests to this relay.
 - When `REMODEX_TRUST_PROXY=true`, configure the proxy to send sanitized client IP headers (`X-Real-Ip` and/or appended `X-Forwarded-For`) instead of passing client-supplied values through unchanged.
 - If you expose the relay under a shared-domain prefix such as `/remodex`, have the proxy strip that prefix before forwarding so the Node server still receives `/relay/...` and `/v1/push/...`.

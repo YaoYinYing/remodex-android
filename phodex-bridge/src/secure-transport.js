@@ -29,6 +29,7 @@ const HANDSHAKE_MODE_QR_BOOTSTRAP = "qr_bootstrap";
 const HANDSHAKE_MODE_TRUSTED_RECONNECT = "trusted_reconnect";
 const SECURE_SENDER_MAC = "mac";
 const SECURE_SENDER_IPHONE = "iphone";
+const SECURE_SENDER_ANDROID = "android";
 const MAX_PAIRING_AGE_MS = 5 * 60 * 1000;
 const MAX_BRIDGE_OUTBOUND_MESSAGES = 500;
 const MAX_BRIDGE_OUTBOUND_BYTES = 10 * 1024 * 1024;
@@ -75,7 +76,7 @@ function createBridgeSecureTransport({
       if (parsed.method || parsed.id != null) {
         sendControlMessage(createSecureError({
           code: "update_required",
-          message: "This bridge requires the latest Remodex iPhone app for secure pairing.",
+          message: "This bridge requires the latest Remodex mobile app for secure pairing.",
         }));
         return true;
       }
@@ -418,7 +419,7 @@ function createBridgeSecureTransport({
     if (
       incomingSessionId !== sessionId
       || keyEpoch !== activeSession.keyEpoch
-      || sender !== SECURE_SENDER_IPHONE
+      || !isPhoneSender(sender)
       || !Number.isInteger(counter)
       || counter <= activeSession.lastInboundCounter
     ) {
@@ -429,7 +430,7 @@ function createBridgeSecureTransport({
       return true;
     }
 
-    const plaintextBuffer = decryptEnvelopeBuffer(message, activeSession.phoneToMacKey, SECURE_SENDER_IPHONE, counter);
+    const plaintextBuffer = decryptEnvelopeBuffer(message, activeSession.phoneToMacKey, sender, counter);
     if (!plaintextBuffer) {
       sendControlMessage(createSecureError({
         code: "decrypt_failed",
@@ -673,6 +674,10 @@ function encodeLengthPrefixedBuffer(buffer) {
   return Buffer.concat([lengthBuffer, buffer]);
 }
 
+function isPhoneSender(sender) {
+  return sender === SECURE_SENDER_IPHONE || sender === SECURE_SENDER_ANDROID;
+}
+
 function nonceForDirection(sender, counter) {
   const nonce = Buffer.alloc(12, 0);
   nonce.writeUInt8(sender === SECURE_SENDER_MAC ? 1 : 2, 0);
@@ -735,4 +740,10 @@ module.exports = {
   SECURE_PROTOCOL_VERSION,
   createBridgeSecureTransport,
   nonceForDirection,
+  __test: {
+    buildTranscriptBytes,
+    encodeLengthPrefixedUTF8,
+    encodeLengthPrefixedBuffer,
+    isPhoneSender,
+  },
 };

@@ -1,21 +1,23 @@
 // FILE: push-service.js
-// Purpose: Stores session-scoped APNs registration state and sends completion pushes for relay-hosted Remodex sessions.
+// Purpose: Stores session-scoped push registration state and sends completion pushes for relay-hosted Remodex sessions.
 // Layer: Hosted service helper
 // Exports: createPushSessionService, createFileBackedPushStateStore, resolvePushStateFilePath
-// Depends on: crypto, fs, os, path, ./apns-client
+// Depends on: crypto, fs, os, path, ./push-provider-router
 
 const crypto = require("crypto");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { createAPNsClient } = require("./apns-client");
+const { createPushProviderRouter } = require("./push-provider-router");
 
 const PUSH_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
 const PUSH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PUSH_PREVIEW_MAX_CHARS = 160;
 
 function createPushSessionService({
-  apnsClient = createAPNsClient(apnsConfigFromEnv(process.env)),
+  pushProviderRouter = null,
+  apnsClient,
+  fcmClient,
   canRegisterSession = () => true,
   canNotifyCompletion = null,
   now = () => Date.now(),
@@ -24,6 +26,10 @@ function createPushSessionService({
     stateFilePath: resolvePushStateFilePath(process.env),
   }),
 } = {}) {
+  const resolvedPushProviderRouter = pushProviderRouter || createPushProviderRouter({
+    apnsClient,
+    fcmClient,
+  });
   const resolvedCanNotifyCompletion = typeof canNotifyCompletion === "function"
     ? canNotifyCompletion
     : canRegisterSession;
@@ -37,11 +43,17 @@ function createPushSessionService({
     notificationSecret,
     deviceToken,
     alertsEnabled,
+    platform,
+    pushProvider,
+    pushEnvironment,
     apnsEnvironment,
   } = {}) {
     const normalizedSessionId = readString(sessionId);
     const normalizedSecret = readString(notificationSecret);
-    const normalizedDeviceToken = normalizeDeviceToken(deviceToken);
+    const normalizedPlatform = normalizePushPlatform(platform);
+    const normalizedPushProvider = normalizePushProvider(pushProvider, normalizedPlatform);
+    const normalizedPushEnvironment = normalizePushEnvironment(pushEnvironment || apnsEnvironment);
+    const normalizedDeviceToken = normalizeDeviceToken(deviceToken, normalizedPushProvider);
 
     if (!normalizedSessionId || !normalizedSecret || !normalizedDeviceToken) {
       throw pushServiceError(
@@ -71,7 +83,11 @@ function createPushSessionService({
       notificationSecret: normalizedSecret,
       deviceToken: normalizedDeviceToken,
       alertsEnabled: Boolean(alertsEnabled),
-      apnsEnvironment: apnsEnvironment === "development" ? "development" : "production",
+      platform: normalizedPlatform,
+      pushProvider: normalizedPushProvider,
+      pushEnvironment: normalizedPushEnvironment,
+      // Backward-compatible field name for older state readers.
+      apnsEnvironment: normalizedPushEnvironment,
       updatedAt: now(),
     });
     persistState("registerDevice");
@@ -127,9 +143,15 @@ function createPushSessionService({
       return { ok: true, skipped: true };
     }
 
-    await apnsClient.sendNotification({
+    const sessionPlatform = normalizePushPlatform(session.platform);
+    const sessionPushProvider = normalizePushProvider(session.pushProvider, sessionPlatform);
+    const sessionPushEnvironment = normalizePushEnvironment(
+      session.pushEnvironment || session.apnsEnvironment
+    );
+    await resolvedPushProviderRouter.sendNotification({
+      pushProvider: sessionPushProvider,
       deviceToken: session.deviceToken,
-      apnsEnvironment: session.apnsEnvironment,
+      pushEnvironment: sessionPushEnvironment,
       title: normalizePreviewText(title) || "New Thread",
       body: normalizePreviewText(body) || fallbackBodyForResult(normalizedResult),
       payload: {
@@ -147,10 +169,12 @@ function createPushSessionService({
 
   function getStats() {
     pruneDeliveredDedupeKeys();
+    const providerStats = resolvedPushProviderRouter.getStats?.() || {};
     return {
       registeredSessions: sessions.size,
       deliveredDedupeKeys: deliveredDedupeKeys.size,
-      apnsConfigured: apnsClient.isConfigured(),
+      apnsConfigured: Boolean(providerStats.apnsConfigured),
+      fcmConfigured: Boolean(providerStats.fcmConfigured),
     };
   }
 
@@ -251,36 +275,6 @@ function createFileBackedPushStateStore({ stateFilePath } = {}) {
   };
 }
 
-function apnsConfigFromEnv(env) {
-  return {
-    teamId: readFirstDefinedEnv(["REMODEX_APNS_TEAM_ID", "PHODEX_APNS_TEAM_ID"], env),
-    keyId: readFirstDefinedEnv(["REMODEX_APNS_KEY_ID", "PHODEX_APNS_KEY_ID"], env),
-    bundleId: readFirstDefinedEnv(["REMODEX_APNS_BUNDLE_ID", "PHODEX_APNS_BUNDLE_ID"], env),
-    privateKey: readAPNsPrivateKey(env),
-  };
-}
-
-function readAPNsPrivateKey(env) {
-  const rawValue = readFirstDefinedEnv(["REMODEX_APNS_PRIVATE_KEY", "PHODEX_APNS_PRIVATE_KEY"], env);
-  if (rawValue) {
-    return rawValue;
-  }
-
-  const filePath = readFirstDefinedEnv(
-    ["REMODEX_APNS_PRIVATE_KEY_FILE", "PHODEX_APNS_PRIVATE_KEY_FILE"],
-    env
-  );
-  if (!filePath) {
-    return "";
-  }
-
-  try {
-    return fs.readFileSync(filePath, "utf8");
-  } catch {
-    return "";
-  }
-}
-
 function readFirstDefinedEnv(keys, env) {
   for (const key of keys) {
     const value = readString(env?.[key]);
@@ -291,13 +285,42 @@ function readFirstDefinedEnv(keys, env) {
   return "";
 }
 
-function normalizeDeviceToken(value) {
+function normalizeDeviceToken(value, pushProvider) {
   const normalized = readString(value);
   if (!normalized) {
     return "";
   }
 
-  return normalized.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
+  if (pushProvider === "apns") {
+    return normalized.replace(/[^a-fA-F0-9]/g, "").toLowerCase();
+  }
+  return normalized;
+}
+
+function normalizePushPlatform(value) {
+  const normalized = readString(value).toLowerCase();
+  if (normalized === "android") {
+    return "android";
+  }
+  if (normalized === "ios" || normalized === "iphone") {
+    return "ios";
+  }
+  return "ios";
+}
+
+function normalizePushProvider(value, platform) {
+  const normalized = readString(value).toLowerCase();
+  if (normalized === "fcm") {
+    return "fcm";
+  }
+  if (normalized === "apns") {
+    return "apns";
+  }
+  return platform === "android" ? "fcm" : "apns";
+}
+
+function normalizePushEnvironment(value) {
+  return readString(value) === "development" ? "development" : "production";
 }
 
 function normalizePreviewText(value) {

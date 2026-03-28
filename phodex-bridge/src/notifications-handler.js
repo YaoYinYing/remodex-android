@@ -49,7 +49,9 @@ function createNotificationsHandler({ pushServiceClient, logPrefix = "[remodex]"
 
     const deviceToken = readString(params.deviceToken);
     const alertsEnabled = Boolean(params.alertsEnabled);
-    const apnsEnvironment = readAPNsEnvironment(params.appEnvironment);
+    const platform = normalizePushPlatform(params.platform);
+    const pushProvider = normalizePushProvider(params.pushProvider, platform);
+    const pushEnvironment = normalizePushEnvironment(params.pushEnvironment || params.appEnvironment);
     if (!deviceToken) {
       throw notificationsError(
         "missing_device_token",
@@ -60,13 +62,19 @@ function createNotificationsHandler({ pushServiceClient, logPrefix = "[remodex]"
     await pushServiceClient.registerDevice({
       deviceToken,
       alertsEnabled,
-      apnsEnvironment,
+      platform,
+      pushProvider,
+      pushEnvironment,
+      // Backward compatibility for relays that still read APNs naming.
+      apnsEnvironment: pushEnvironment,
     });
 
     return {
       ok: true,
       alertsEnabled,
-      apnsEnvironment,
+      platform,
+      pushProvider,
+      pushEnvironment,
     };
   }
 
@@ -79,8 +87,30 @@ function readString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-function readAPNsEnvironment(value) {
+function normalizePushEnvironment(value) {
   return value === "development" ? "development" : "production";
+}
+
+function normalizePushPlatform(value) {
+  const normalized = readString(value)?.toLowerCase();
+  if (normalized === "android") {
+    return "android";
+  }
+  if (normalized === "iphone" || normalized === "ios") {
+    return "ios";
+  }
+  return "ios";
+}
+
+function normalizePushProvider(value, platform) {
+  const normalized = readString(value)?.toLowerCase();
+  if (normalized === "fcm") {
+    return "fcm";
+  }
+  if (normalized === "apns") {
+    return "apns";
+  }
+  return platform === "android" ? "fcm" : "apns";
 }
 
 function notificationsError(errorCode, userMessage) {

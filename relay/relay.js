@@ -9,13 +9,13 @@ const { WebSocket } = require("ws");
 const CLEANUP_DELAY_MS = 60_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const CLOSE_CODE_SESSION_UNAVAILABLE = 4002;
-const CLOSE_CODE_IPHONE_REPLACED = 4003;
+const CLOSE_CODE_MOBILE_REPLACED = 4003;
 const CLOSE_CODE_MAC_ABSENCE_BUFFER_FULL = 4004;
 const MAC_ABSENCE_GRACE_MS = 15_000;
 const TRUSTED_SESSION_RESOLVE_TAG = "remodex-trusted-session-resolve-v1";
 const TRUSTED_SESSION_RESOLVE_SKEW_MS = 90_000;
 
-// In-memory session registry for one Mac host and one live iPhone client per session.
+// In-memory session registry for one Mac host and one live mobile client per session.
 const sessions = new Map();
 const liveSessionsByMacDeviceId = new Map();
 const usedResolveNonces = new Map();
@@ -49,7 +49,7 @@ function setupRelay(
     const sessionId = match?.[1];
     const role = req.headers["x-role"];
 
-    if (!sessionId || (role !== "mac" && role !== "iphone")) {
+    if (!sessionId || (role !== "mac" && !isMobileRole(role))) {
       ws.close(4000, "Missing sessionId or invalid x-role header");
       return;
     }
@@ -60,7 +60,7 @@ function setupRelay(
     });
 
     // Only the Mac host is allowed to create a fresh session room.
-    if (role === "iphone" && !sessions.has(sessionId)) {
+    if (isMobileRole(role) && !sessions.has(sessionId)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac session not available");
       return;
     }
@@ -78,7 +78,7 @@ function setupRelay(
 
     const session = sessions.get(sessionId);
 
-    if (role === "iphone" && !canAcceptIphoneConnection(session)) {
+    if (isMobileRole(role) && !canAcceptMobileConnection(session)) {
       ws.close(CLOSE_CODE_SESSION_UNAVAILABLE, "Mac session not available");
       return;
     }
@@ -101,7 +101,7 @@ function setupRelay(
       registerLiveMacSession(session.macRegistration);
       console.log(`[relay] Mac connected -> ${relaySessionLogLabel(sessionId)}`);
     } else {
-      // Keep one live iPhone RPC client per session to avoid competing sockets.
+      // Keep one live mobile RPC client per session to avoid competing sockets.
       for (const existingClient of session.clients) {
         if (existingClient === ws) {
           continue;
@@ -111,8 +111,8 @@ function setupRelay(
           || existingClient.readyState === WebSocket.CONNECTING
         ) {
           existingClient.close(
-            CLOSE_CODE_IPHONE_REPLACED,
-            "Replaced by newer iPhone connection"
+            CLOSE_CODE_MOBILE_REPLACED,
+            "Replaced by newer mobile connection"
           );
         }
         session.clients.delete(existingClient);
@@ -120,7 +120,7 @@ function setupRelay(
 
       session.clients.add(ws);
       console.log(
-        `[relay] iPhone connected -> ${relaySessionLogLabel(sessionId)} `
+        `[relay] Mobile(${role}) connected -> ${relaySessionLogLabel(sessionId)} `
         + `(${session.clients.size} client(s))`
       );
     }
@@ -166,7 +166,7 @@ function setupRelay(
       } else {
         session.clients.delete(ws);
         console.log(
-          `[relay] iPhone disconnected -> ${relaySessionLogLabel(sessionId)} `
+          `[relay] Mobile(${role}) disconnected -> ${relaySessionLogLabel(sessionId)} `
           + `(${session.clients.size} remaining)`
         );
       }
@@ -249,7 +249,7 @@ function clearMacAbsenceTimer(session, { clearTimeoutFn = clearTimeout } = {}) {
   session.macAbsenceTimer = null;
 }
 
-function canAcceptIphoneConnection(session) {
+function canAcceptMobileConnection(session) {
   if (!session) {
     return false;
   }
@@ -261,6 +261,10 @@ function canAcceptIphoneConnection(session) {
   // Lets the phone rejoin the same relay session while the Mac is still inside
   // the temporary-absence grace window instead of forcing a full disconnect flow.
   return Boolean(session.macAbsenceTimer);
+}
+
+function isMobileRole(role) {
+  return role === "iphone" || role === "android";
 }
 
 function closeSessionClients(session, code, reason) {

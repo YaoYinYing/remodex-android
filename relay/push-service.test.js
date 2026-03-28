@@ -236,3 +236,49 @@ test("push service keeps working when state persistence fails", async () => {
   assert.equal(sent.length, 1);
   assert.equal(sent[0].deviceToken, "aabbcc");
 });
+
+test("push service routes android registrations to the FCM provider without APNs token normalization", async () => {
+  const sent = [];
+  const service = createPushSessionService({
+    pushProviderRouter: {
+      async sendNotification(payload) {
+        sent.push(payload);
+      },
+      getStats() {
+        return {
+          apnsConfigured: false,
+          fcmConfigured: true,
+        };
+      },
+    },
+    stateStore: {
+      read() {
+        return {
+          sessions: [],
+          deliveredDedupeKeys: [],
+        };
+      },
+      write() {},
+    },
+    canRegisterSession: () => true,
+  });
+
+  await service.registerDevice({
+    sessionId: "session-android",
+    notificationSecret: "secret-android",
+    deviceToken: "fcm-token:AA_BB-123",
+    alertsEnabled: true,
+    platform: "android",
+  });
+
+  await service.notifyCompletion({
+    sessionId: "session-android",
+    notificationSecret: "secret-android",
+    threadId: "thread-android",
+    dedupeKey: "done-android",
+  });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].pushProvider, "fcm");
+  assert.equal(sent[0].deviceToken, "fcm-token:AA_BB-123");
+});

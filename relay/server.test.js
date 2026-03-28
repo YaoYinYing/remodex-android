@@ -115,6 +115,51 @@ test("push registration requires the live mac notification secret", async () => 
   });
 });
 
+test("push registration forwards platform/provider fields to the push service", async () => {
+  const registrations = [];
+  await withServer(async ({ port }) => {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/push/session/register-device`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "session-android-forward",
+        notificationSecret: "secret-android-forward",
+        deviceToken: "fcm-token-1",
+        alertsEnabled: true,
+        platform: "android",
+        pushProvider: "fcm",
+        pushEnvironment: "production",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+  }, {
+    enablePushService: true,
+    pushSessionService: {
+      async registerDevice(payload) {
+        registrations.push(payload);
+        return { ok: true };
+      },
+      async notifyCompletion() {
+        return { ok: true };
+      },
+      getStats() {
+        return {
+          enabled: true,
+          registeredSessions: registrations.length,
+          deliveredDedupeKeys: 0,
+          apnsConfigured: false,
+          fcmConfigured: true,
+        };
+      },
+    },
+  });
+
+  assert.equal(registrations.length, 1);
+  assert.equal(registrations[0].platform, "android");
+  assert.equal(registrations[0].pushProvider, "fcm");
+});
+
 test("completion pushes are rejected after the mac relay session disconnects", async () => {
   await withServer(async ({ port }) => {
     const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-push-completion`, {
@@ -483,6 +528,33 @@ test("websocket relay forwards between mac and iphone on the base relay path", a
     mac.close();
     iphone.close();
     await Promise.all([macClosed, iphoneClosed]);
+  });
+});
+
+test("websocket relay forwards between mac and android on the base relay path", async () => {
+  await withServer(async ({ port }) => {
+    const mac = new WebSocket(`ws://127.0.0.1:${port}/relay/session-android-role`, {
+      headers: { "x-role": "mac" },
+    });
+    const android = new WebSocket(`ws://127.0.0.1:${port}/relay/session-android-role`, {
+      headers: { "x-role": "android" },
+    });
+
+    await Promise.all([onceOpen(mac), onceOpen(android)]);
+
+    const receivedByAndroid = onceMessage(android);
+    mac.send(JSON.stringify({ fromMac: true }));
+    assert.equal(await receivedByAndroid, "{\"fromMac\":true}");
+
+    const receivedByMac = onceMessage(mac);
+    android.send(JSON.stringify({ fromAndroid: true }));
+    assert.equal(await receivedByMac, "{\"fromAndroid\":true}");
+
+    const macClosed = onceClosed(mac);
+    const androidClosed = onceClosed(android);
+    mac.close();
+    android.close();
+    await Promise.all([macClosed, androidClosed]);
   });
 });
 

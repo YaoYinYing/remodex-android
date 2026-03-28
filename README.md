@@ -72,7 +72,7 @@ If you scan the pairing QR with a generic camera or QR reader before installing 
 
 ## Repository Structure
 
-This repo contains the local bridge, the iOS app target, and their tests:
+This repo contains the local bridge, the iOS app target, the Android parity foundation, and their tests:
 
 ```
 ├── phodex-bridge/                # Node.js bridge package used by `remodex`
@@ -87,6 +87,9 @@ This repo contains the local bridge, the iOS app target, and their tests:
 │   ├── CodexMobileTests/         # Unit tests
 │   ├── CodexMobileUITests/       # UI tests
 │   └── BuildSupport/             # Info.plist, xcconfig defaults, and local override templates
+├── CodexAndroid/                 # Android app foundation (Kotlin + Compose)
+│   ├── app/src/main/             # App shell, models, secure transport helpers
+│   └── app/src/test/             # Secure transport golden-vector tests
 ```
 
 ## Prerequisites

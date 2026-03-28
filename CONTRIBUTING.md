@@ -148,6 +148,10 @@ remodex/
 │   ├── CodexMobileTests/   # Unit tests
 │   ├── CodexMobileUITests/ # UI tests
 │   └── BuildSupport/       # Build support files
+│
+├── CodexAndroid/           # Android app foundation (Kotlin + Compose)
+│   ├── app/src/main/       # App shell, models, secure transport helpers
+│   └── app/src/test/       # Golden-vector parity tests
 ```
 
 ### Code style

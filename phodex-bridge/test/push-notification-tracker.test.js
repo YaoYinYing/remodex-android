@@ -431,7 +431,52 @@ test("notifications handler forwards device registration to the push service cli
   assert.deepEqual(registrations, [{
     deviceToken: "aabbcc",
     alertsEnabled: true,
+    platform: "ios",
+    pushProvider: "apns",
+    pushEnvironment: "development",
     apnsEnvironment: "development",
   }]);
   assert.equal(responses[0]?.result?.ok, true);
+});
+
+test("notifications handler forwards explicit android push provider metadata", async () => {
+  const registrations = [];
+  const handler = createNotificationsHandler({
+    pushServiceClient: {
+      hasConfiguredBaseUrl: true,
+      async registerDevice(payload) {
+        registrations.push(payload);
+        return { ok: true };
+      },
+    },
+  });
+
+  const responses = [];
+  const handled = handler.handleNotificationsRequest(JSON.stringify({
+    id: "request-2",
+    method: "notifications/push/register",
+    params: {
+      deviceToken: "fcm-token-1",
+      alertsEnabled: true,
+      platform: "android",
+      pushProvider: "fcm",
+      pushEnvironment: "production",
+    },
+  }), (message) => {
+    responses.push(JSON.parse(message));
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(handled, true);
+  assert.deepEqual(registrations, [{
+    deviceToken: "fcm-token-1",
+    alertsEnabled: true,
+    platform: "android",
+    pushProvider: "fcm",
+    pushEnvironment: "production",
+    apnsEnvironment: "production",
+  }]);
+  assert.equal(responses[0]?.result?.ok, true);
+  assert.equal(responses[0]?.result?.pushProvider, "fcm");
 });

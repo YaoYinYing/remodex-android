@@ -30,6 +30,8 @@ security_best_practices_report.md
 *.swp
 *.swo
 *~
+CodexAndroid/.gradle/
+CodexAndroid/local.properties
 
 # Minified JS bundles (not part of this project)
 /main.js

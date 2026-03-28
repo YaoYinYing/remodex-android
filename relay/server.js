@@ -227,6 +227,7 @@ function createDisabledPushSessionService() {
         registeredSessions: 0,
         deliveredDedupeKeys: 0,
         apnsConfigured: false,
+        fcmConfigured: false,
       };
     },
   };

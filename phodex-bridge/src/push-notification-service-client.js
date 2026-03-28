@@ -19,14 +19,22 @@ function createPushNotificationServiceClient({
   async function registerDevice({
     deviceToken,
     alertsEnabled,
+    platform,
+    pushProvider,
+    pushEnvironment,
     apnsEnvironment,
   } = {}) {
+    const resolvedPushEnvironment = normalizePushEnvironment(pushEnvironment || apnsEnvironment);
     return postJSON("/v1/push/session/register-device", {
       sessionId,
       notificationSecret,
       deviceToken,
       alertsEnabled,
-      apnsEnvironment,
+      platform,
+      pushProvider,
+      pushEnvironment: resolvedPushEnvironment,
+      // Backward compatibility for older push-service payloads.
+      apnsEnvironment: resolvedPushEnvironment,
     });
   }
 
@@ -122,6 +130,10 @@ function normalizeBaseUrl(value) {
   }
 
   return trimmed.replace(/\/+$/, "");
+}
+
+function normalizePushEnvironment(value) {
+  return value === "development" ? "development" : "production";
 }
 
 function createTimeoutAbortError(timeoutMs) {
