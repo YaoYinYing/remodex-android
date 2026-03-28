@@ -1,0 +1,264 @@
+package com.remodex.mobile.service
+
+import com.remodex.mobile.service.push.PushRegistrationPayload
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class CodexServiceTest {
+    @Test
+    fun connectWithFixtureLoadsThreadsAndTimeline() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+
+        service.connectWithFixture()
+
+        assertEquals(ConnectionState.Connected, service.connectionState.value)
+        assertTrue(service.threads.value.isNotEmpty())
+        assertTrue(service.timeline.value.isNotEmpty())
+    }
+
+    @Test
+    fun sendTurnStartAppendsTimelineItemsInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        val beforeSize = service.timeline.value.size
+        service.sendTurnStart("Validate composer parity path.")
+        val afterTimeline = service.timeline.value
+
+        assertTrue(afterTimeline.size > beforeSize)
+        assertTrue(afterTimeline.any { it.text.contains("Validate composer parity path.") })
+        assertTrue(afterTimeline.any { it.text.contains("Fixture reply") })
+    }
+
+    @Test
+    fun registerPushTokenUpdatesStatusInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        service.registerPushToken(
+            PushRegistrationPayload(
+                deviceToken = "fcm-token-xyz",
+                alertsEnabled = true
+            )
+        )
+
+        assertTrue(service.status.value.contains("Push registered via fcm (production)"))
+    }
+
+    @Test
+    fun refreshGitStatusAndBranchesInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        service.refreshGitStatus()
+        service.refreshGitBranches()
+
+        assertTrue(service.gitStatusSummary.value.contains("Branch remodex/android-parity"))
+        assertTrue(service.gitBranches.value.contains("main"))
+        assertTrue(service.gitBranches.value.contains("remodex/android-parity"))
+    }
+
+    @Test
+    fun checkoutGitBranchUpdatesFixtureBranchState() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        service.checkoutGitBranch("feature/fixture-checkout")
+
+        assertTrue(service.gitStatusSummary.value.contains("feature/fixture-checkout"))
+        assertTrue(service.gitBranches.value.contains("feature/fixture-checkout"))
+    }
+
+    @Test
+    fun loadsPersistedPairingOnStartupWhenStoreHasValidPayload() {
+        val persistedPayload = PairingPayload(
+            sessionId = "session-persisted",
+            relayUrl = "ws://127.0.0.1:8765/relay",
+            macDeviceId = "mac-persisted",
+            macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+            expiresAt = System.currentTimeMillis() + 300_000L
+        )
+        val store = InMemoryPairingStore(persistedPayload)
+
+        val service = CodexService(pairingStore = store)
+
+        assertEquals(ConnectionState.Paired, service.connectionState.value)
+        assertTrue(service.status.value.contains("Loaded saved pairing for mac-persisted"))
+    }
+
+    @Test
+    fun startThreadCreatesAndSelectsThreadInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+        val beforeCount = service.threads.value.size
+
+        service.startThread()
+
+        assertTrue(service.threads.value.size > beforeCount)
+        assertTrue(service.selectedThreadId.value?.startsWith("thread-") == true)
+    }
+
+    @Test
+    fun interruptActiveTurnSendsTurnInterruptInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+        service.sendTurnStart("Run a turn and interrupt it.")
+
+        service.interruptActiveTurn()
+
+        assertTrue(service.timeline.value.isNotEmpty())
+        assertTrue(service.status.value.contains("Interrupted turn"))
+    }
+
+    @Test
+    fun gitPullPushAndCommitUpdateStatusInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        service.gitCommit("Fixture commit from Android")
+        assertTrue(service.gitStatusSummary.value.contains("Branch"))
+
+        service.gitPull()
+        assertTrue(service.gitStatusSummary.value.contains("Branch"))
+
+        service.gitPush()
+        assertTrue(service.gitStatusSummary.value.contains("Branch"))
+    }
+
+    @Test
+    fun refreshWorkflowSignalsInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        service.refreshRateLimitInfo()
+        service.refreshModels()
+        service.refreshPendingPermissions()
+        service.refreshCiStatus()
+
+        assertTrue(service.rateLimitInfo.value.contains("Rate limit"))
+        assertTrue(service.availableModels.value.isNotEmpty())
+        assertTrue(service.pendingPermissions.value.isNotEmpty())
+        assertTrue(service.ciStatus.value.contains("CI status"))
+    }
+
+    @Test
+    fun switchModelAndGrantPermissionInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+        service.refreshPendingPermissions()
+        val beforeCount = service.pendingPermissions.value.size
+
+        service.switchModel("gpt-5.4-mini")
+        val permissionId = service.pendingPermissions.value.first().id
+        service.grantPermission(permissionId, allow = true)
+
+        assertEquals("gpt-5.4-mini", service.selectedModel.value)
+        assertTrue(service.pendingPermissions.value.size < beforeCount)
+    }
+
+    private class InMemoryPairingStore(
+        private var payload: PairingPayload? = null
+    ) : PairingStateStore {
+        override fun load(): PairingPayload? = payload
+
+        override fun save(payload: PairingPayload) {
+            this.payload = payload
+        }
+
+        override fun clear() {
+            payload = null
+        }
+    }
+}
