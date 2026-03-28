@@ -16,6 +16,12 @@ data class ThreadProjectGroup(
     val latestUpdatedAtMillis: Long
 )
 
+data class ThreadHierarchyRow(
+    val thread: ThreadSummary,
+    val depth: Int,
+    val childCount: Int
+)
+
 fun groupThreadsByProject(
     threads: List<ThreadSummary>,
     query: String
@@ -39,10 +45,7 @@ fun groupThreadsByProject(
     }
 
     val projectGroups = grouped.map { (projectKey, projectThreads) ->
-        val sortedThreads = projectThreads.sortedWith(
-            compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
-                .thenBy { it.id }
-        )
+        val sortedThreads = orderThreadsForSidebar(projectThreads)
         val latest = sortedThreads.firstOrNull()?.updatedAtMillis ?: Long.MIN_VALUE
         val projectPath = if (projectKey == "cloud") null else projectKey
         ThreadProjectGroup(
@@ -62,10 +65,7 @@ fun groupThreadsByProject(
     if (archivedThreads.isEmpty()) {
         return projectGroups
     }
-    val sortedArchived = archivedThreads.sortedWith(
-        compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
-            .thenBy { it.id }
-    )
+    val sortedArchived = orderThreadsForSidebar(archivedThreads)
     val archivedGroup = ThreadProjectGroup(
         id = "archived",
         label = "Archived (${sortedArchived.size})",
@@ -75,6 +75,47 @@ fun groupThreadsByProject(
         latestUpdatedAtMillis = sortedArchived.firstOrNull()?.updatedAtMillis ?: Long.MIN_VALUE
     )
     return projectGroups + archivedGroup
+}
+
+fun flattenThreadHierarchy(
+    threads: List<ThreadSummary>,
+    collapsedParentIds: Set<String>
+): List<ThreadHierarchyRow> {
+    val byParentId = threads.groupBy { it.parentThreadId?.trim().orEmpty() }
+    val knownIds = threads.map { it.id }.toSet()
+    val roots = threads.filter { thread ->
+        val parent = thread.parentThreadId?.trim().orEmpty()
+        parent.isEmpty() || !knownIds.contains(parent)
+    }
+    val sortedRoots = roots.sortedWith(
+        compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
+            .thenBy { it.id }
+    )
+    val output = mutableListOf<ThreadHierarchyRow>()
+    val visited = mutableSetOf<String>()
+
+    fun append(thread: ThreadSummary, depth: Int) {
+        if (!visited.add(thread.id)) {
+            return
+        }
+        val children = byParentId[thread.id].orEmpty().sortedWith(
+            compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
+                .thenBy { it.id }
+        )
+        output += ThreadHierarchyRow(
+            thread = thread,
+            depth = depth.coerceAtLeast(0),
+            childCount = children.size
+        )
+        if (collapsedParentIds.contains(thread.id)) {
+            return
+        }
+        children.forEach { child -> append(child, depth + 1) }
+    }
+
+    sortedRoots.forEach { root -> append(root, depth = 0) }
+    threads.filterNot { visited.contains(it.id) }.forEach { orphan -> append(orphan, depth = 0) }
+    return output
 }
 
 data class ComposerCommand(
@@ -111,6 +152,11 @@ val DefaultComposerCommands = listOf(
     ComposerCommand("/status", "Status", "Refresh thread/git/rate-limit status."),
     ComposerCommand("/new", "New Chat", "Create a new thread in current project."),
     ComposerCommand("/refresh", "Refresh", "Force workspace refresh."),
+    ComposerCommand("/resume", "Resume", "Resume the current thread."),
+    ComposerCommand("/fork", "Fork", "Fork the current thread."),
+    ComposerCommand("/review", "Review", "Start review mode for the current thread."),
+    ComposerCommand("/subagents", "Subagents", "Insert subagent workflow command scaffold."),
+    ComposerCommand("/steer", "Steer", "Steer the active turn with additional guidance."),
     ComposerCommand("/help", "Help", "Show command and mention hints.")
 )
 
@@ -199,4 +245,11 @@ private fun projectLabelForPath(path: String?): String {
         return "/"
     }
     return normalized.substringAfterLast('/').ifBlank { normalized }
+}
+
+private fun orderThreadsForSidebar(threads: List<ThreadSummary>): List<ThreadSummary> {
+    if (threads.isEmpty()) {
+        return emptyList()
+    }
+    return flattenThreadHierarchy(threads, collapsedParentIds = emptySet()).map { it.thread }
 }

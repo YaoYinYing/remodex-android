@@ -1,6 +1,7 @@
 package com.remodex.mobile.ui.parity
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -27,6 +28,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.model.ThreadSummary
@@ -34,6 +37,8 @@ import com.remodex.mobile.model.TimelineEntry
 import com.remodex.mobile.model.TimelineRole
 import com.remodex.mobile.service.PendingPermissionRequest
 import com.remodex.mobile.service.ServiceEvent
+import com.remodex.mobile.service.ConnectionState
+import com.remodex.mobile.R
 import com.remodex.mobile.ui.theme.AlertAmber
 import com.remodex.mobile.ui.theme.AlertRed
 import com.remodex.mobile.ui.theme.CommandAccent
@@ -247,6 +252,7 @@ fun InlineStatusCard(
 
 @Composable
 fun EmptyHomeCard(
+    connectionState: ConnectionState,
     status: String,
     projectPath: String?,
     rateLimitInfo: String,
@@ -267,7 +273,35 @@ fun EmptyHomeCard(
                 .padding(22.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            StatusPill(text = "Ready")
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.original_author_icon),
+                    contentDescription = "Remodex",
+                    modifier = Modifier
+                        .size(54.dp)
+                        .clip(RoundedCornerShape(14.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                StatusPill(
+                    text = when (connectionState) {
+                        ConnectionState.Connected -> "Connected"
+                        ConnectionState.Connecting -> "Connecting"
+                        ConnectionState.Paired -> "Paired"
+                        ConnectionState.Disconnected -> "Offline"
+                        is ConnectionState.Failed -> "Failed"
+                    },
+                    accent = when (connectionState) {
+                        ConnectionState.Connected -> CommandAccent
+                        ConnectionState.Connecting -> AlertAmber
+                        ConnectionState.Paired -> PlanAccent
+                        ConnectionState.Disconnected -> MaterialTheme.colorScheme.onSurfaceVariant
+                        is ConnectionState.Failed -> AlertRed
+                    }
+                )
+            }
             Text(
                 text = "Remodex",
                 style = MaterialTheme.typography.headlineMedium,
@@ -445,16 +479,22 @@ fun EventRow(event: ServiceEvent) {
 fun ThreadRow(
     thread: ThreadSummary,
     isSelected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    depth: Int = 0,
+    childCount: Int = 0,
+    isChildrenExpanded: Boolean = false,
+    onToggleChildren: (() -> Unit)? = null
 ) {
     val borderColor = animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
         label = "threadBorder"
     )
+    val depthPadding = (depth.coerceIn(0, 5) * 14).dp
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(start = depthPadding)
             .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(18.dp),
@@ -467,19 +507,48 @@ fun ThreadRow(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(
-                text = thread.displayTitle,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (thread.isArchived) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = "Archived",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = thread.agentDisplayLabel ?: thread.displayTitle,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
+                if (childCount > 0 && onToggleChildren != null) {
+                    Text(
+                        text = if (isChildrenExpanded) "▼ $childCount" else "▶ $childCount",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable(onClick = onToggleChildren)
+                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (thread.isArchived) {
+                    ThreadMetadataBadge(label = "Archived")
+                }
+                if (thread.isSubagent) {
+                    ThreadMetadataBadge(label = "Subagent")
+                }
+                if (thread.isForkedThread) {
+                    ThreadMetadataBadge(label = "Fork")
+                }
+                if (!thread.model.isNullOrBlank()) {
+                    ThreadMetadataBadge(label = thread.model)
+                }
             }
             if (!thread.preview.isNullOrBlank()) {
                 Text(
@@ -504,16 +573,50 @@ fun ThreadRow(
 }
 
 @Composable
-fun TimelineRow(item: TimelineEntry) {
-    val accent = when (item.role) {
-        TimelineRole.USER -> PlanAccent
-        TimelineRole.ASSISTANT -> CommandAccent
-        TimelineRole.SYSTEM -> MaterialTheme.colorScheme.tertiary
+private fun ThreadMetadataBadge(label: String) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
-    val bubbleColor = when (item.role) {
-        TimelineRole.USER -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-        TimelineRole.ASSISTANT -> MaterialTheme.colorScheme.surface
-        TimelineRole.SYSTEM -> MaterialTheme.colorScheme.surfaceVariant
+}
+
+@Composable
+fun TimelineRow(item: TimelineEntry) {
+    val normalizedType = item.type.trim().lowercase()
+    val accent = when {
+        item.role == TimelineRole.USER -> PlanAccent
+        item.role == TimelineRole.ASSISTANT -> CommandAccent
+        normalizedType.contains("plan") -> PlanAccent
+        normalizedType.contains("reasoning") -> AlertAmber
+        normalizedType.contains("tool") || normalizedType.contains("command") -> CommandAccent
+        normalizedType.contains("diff") || normalizedType.contains("filechange") -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.tertiary
+    }
+    val bubbleColor = when {
+        item.role == TimelineRole.USER -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+        item.role == TimelineRole.ASSISTANT -> MaterialTheme.colorScheme.surface
+        normalizedType.contains("reasoning") -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val label = when {
+        item.role == TimelineRole.USER -> "user"
+        item.role == TimelineRole.ASSISTANT -> "assistant"
+        normalizedType.contains("plan") -> "plan"
+        normalizedType.contains("reasoning") -> "thinking"
+        normalizedType.contains("tool") -> "tool"
+        normalizedType.contains("command") -> "command"
+        normalizedType.contains("filechange") -> "file change"
+        normalizedType.contains("diff") -> "diff"
+        else -> "system"
     }
 
     Surface(
@@ -529,7 +632,7 @@ fun TimelineRow(item: TimelineEntry) {
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
-                text = "${item.role.name.lowercase()} • ${item.type}",
+                text = "$label • ${item.type}",
                 style = MaterialTheme.typography.labelSmall,
                 color = accent
             )

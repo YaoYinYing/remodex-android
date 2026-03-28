@@ -356,10 +356,76 @@ class CodexService(
             "turn/started" -> handleTurnStartedNotification(params)
             "turn/completed" -> handleTurnCompletedNotification(params)
             "turn/failed" -> handleTurnFailedNotification(params)
+            "turn/plan/updated",
+            "item/plan/delta" -> handleTypedDeltaNotification(
+                params = params,
+                type = "plan",
+                append = true
+            )
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/summaryPartAdded",
+            "item/reasoning/textDelta" -> handleTypedDeltaNotification(
+                params = params,
+                type = "reasoning",
+                append = true
+            )
+            "item/fileChange/outputDelta" -> handleTypedDeltaNotification(
+                params = params,
+                type = "filechange",
+                append = true
+            )
+            "item/toolCall/outputDelta",
+            "item/toolCall/output_delta",
+            "item/tool_call/outputDelta",
+            "item/tool_call/output_delta" -> handleTypedDeltaNotification(
+                params = params,
+                type = "toolcall",
+                append = true
+            )
+            "item/commandExecution/outputDelta",
+            "item/command_execution/outputDelta",
+            "item/commandExecution/terminalInteraction",
+            "item/command_execution/terminalInteraction" -> handleTypedDeltaNotification(
+                params = params,
+                type = "commandexecution",
+                append = true
+            )
+            "turn/diff/updated",
+            "codex/event/turn_diff_updated",
+            "codex/event/turn_diff",
+            "codex/event/patch_apply_begin",
+            "codex/event/patch_apply_end" -> handleTypedDeltaNotification(
+                params = params,
+                type = "diff",
+                append = false
+            )
             "item/agentMessage/delta",
             "codex/event/agent_message_content_delta",
             "codex/event/agent_message_delta" -> handleAssistantDeltaNotification(params)
             "codex/event/user_message" -> handleUserMessageNotification(params)
+            "thread/tokenUsage/updated",
+            "account/rateLimits/updated" -> runCatching {
+                refreshRateLimitInfo(silentStatus = true)
+            }
+            "account/updated",
+            "account/login/completed" -> {
+                val accountLabel = params.string("email", "name", "account", "status")
+                if (!accountLabel.isNullOrBlank()) {
+                    setStatus("Account updated: $accountLabel")
+                }
+            }
+            "item/completed",
+            "codex/event/item_completed",
+            "codex/event/agent_message" -> handleItemCompletedNotification(params)
+            "item/started",
+            "codex/event/item_started" -> handleItemStartedNotification(params)
+            "error",
+            "codex/event/error" -> handleTurnFailedNotification(params)
+            else -> {
+                if (method.startsWith("codex/event/")) {
+                    handleGenericCodexEventNotification(method = method, params = params)
+                }
+            }
         }
     }
 
@@ -501,6 +567,105 @@ class CodexService(
         updateThreadPreviewAndTimestamp(threadId = threadId, preview = text)
     }
 
+    private fun handleTypedDeltaNotification(
+        params: JsonObject,
+        type: String,
+        append: Boolean
+    ) {
+        val threadId = resolveThreadIdFromNotification(params) ?: return
+        val turnId = params.string("turnId", "turn_id")
+        val text = extractNotificationText(params) ?: timelineFallbackText(type)
+        val itemId = params.string("itemId", "item_id", "id")
+            ?: "$type-${threadId}-${turnId ?: "unknown"}"
+        val entry = TimelineEntry(
+            id = itemId,
+            threadId = threadId,
+            turnId = turnId,
+            type = type,
+            role = com.remodex.mobile.model.TimelineRole.SYSTEM,
+            text = text
+        )
+        appendOrMergeTimelineEntry(entry = entry, append = append)
+        updateThreadPreviewAndTimestamp(threadId = threadId, preview = text)
+    }
+
+    private fun handleItemStartedNotification(params: JsonObject) {
+        val itemType = normalizeNotificationType(
+            params.string("itemType", "item_type")
+                ?: (params["item"] as? JsonObject)?.string("type")
+                ?: params.string("type")
+        )
+        val normalizedType = itemType.ifEmpty { "status" }
+        handleTypedDeltaNotification(
+            params = params,
+            type = normalizedType,
+            append = false
+        )
+    }
+
+    private fun handleItemCompletedNotification(params: JsonObject) {
+        val itemType = normalizeNotificationType(
+            params.string("itemType", "item_type")
+                ?: (params["item"] as? JsonObject)?.string("type")
+                ?: params.string("type")
+        )
+        val normalizedType = itemType.ifEmpty { "status" }
+        handleTypedDeltaNotification(
+            params = params,
+            type = normalizedType,
+            append = true
+        )
+    }
+
+    private fun handleGenericCodexEventNotification(method: String, params: JsonObject) {
+        val eventName = method.removePrefix("codex/event/")
+        when (eventName) {
+            "agent_message_content_delta",
+            "agent_message_delta" -> handleAssistantDeltaNotification(params)
+            "user_message" -> handleUserMessageNotification(params)
+            "item_started" -> handleItemStartedNotification(params)
+            "item_completed",
+            "agent_message" -> handleItemCompletedNotification(params)
+            "turn_diff_updated",
+            "turn_diff",
+            "patch_apply_begin",
+            "patch_apply_end" -> handleTypedDeltaNotification(params, type = "diff", append = false)
+            "exec_command_begin",
+            "exec_command_output_delta",
+            "exec_command_end",
+            "background_event",
+            "read",
+            "search",
+            "list_files" -> handleTypedDeltaNotification(params, type = "commandexecution", append = true)
+            "error" -> handleTurnFailedNotification(params)
+            else -> {
+                val normalizedType = normalizeNotificationType(eventName).ifEmpty { "status" }
+                handleTypedDeltaNotification(params, type = normalizedType, append = true)
+            }
+        }
+    }
+
+    private fun normalizeNotificationType(value: String?): String {
+        return value
+            ?.trim()
+            ?.lowercase()
+            ?.replace("_", "")
+            ?.replace("-", "")
+            .orEmpty()
+    }
+
+    private fun timelineFallbackText(type: String): String {
+        return when (normalizeNotificationType(type)) {
+            "plan" -> "Plan updated."
+            "reasoning" -> "Thinking..."
+            "toolcall" -> "Tool output updated."
+            "filechange" -> "File changes updated."
+            "commandexecution" -> "Command output updated."
+            "diff" -> "Diff updated."
+            else -> "Status updated."
+        }
+    }
+
     private fun appendOrMergeTimelineEntry(entry: TimelineEntry, append: Boolean) {
         if (_selectedThreadId.value != entry.threadId) {
             return
@@ -570,16 +735,46 @@ class CodexService(
     }
 
     private fun resolveThreadIdFromNotification(params: JsonObject): String? {
-        params.string("threadId", "thread_id")?.let { return it }
+        params.string("threadId", "thread_id", "thread")?.let { return it }
         val threadObject = params["thread"] as? JsonObject
         threadObject?.string("id")?.let { return it }
         val itemObject = params["item"] as? JsonObject
         itemObject?.string("threadId", "thread_id")?.let { return it }
+        val metaObject = params["metadata"] as? JsonObject
+        metaObject?.string("threadId", "thread_id")?.let { return it }
+        val msgObject = params["msg"] as? JsonObject
+        msgObject?.string("threadId", "thread_id")?.let { return it }
         return _selectedThreadId.value
     }
 
     private fun extractNotificationText(params: JsonObject): String? {
-        params.string("text", "message", "delta")?.let { text ->
+        params.string(
+            "text",
+            "message",
+            "delta",
+            "contentDelta",
+            "summary",
+            "status",
+            "error",
+            "unified_diff",
+            "patch"
+        )?.let { text ->
+            if (text.isNotBlank()) {
+                return text
+            }
+        }
+        val msgObject = params["msg"] as? JsonObject
+        msgObject?.string(
+            "text",
+            "message",
+            "delta",
+            "contentDelta",
+            "summary",
+            "status",
+            "error",
+            "unified_diff",
+            "patch"
+        )?.let { text ->
             if (text.isNotBlank()) {
                 return text
             }
@@ -592,10 +787,19 @@ class CodexService(
                 itemObject = itemObject
             )?.text?.let { return it }
         }
+        val detailsObject = params["details"] as? JsonObject
+        if (detailsObject != null) {
+            detailsObject.string("text", "message", "summary", "command", "query", "path")?.let { text ->
+                if (text.isNotBlank()) {
+                    return text
+                }
+            }
+        }
         val content = params["content"] as? JsonArray ?: return null
         return content.firstNotNullOfOrNull { element ->
             val part = element as? JsonObject ?: return@firstNotNullOfOrNull null
-            part.string("text", "message", "delta")?.takeIf { it.isNotBlank() }
+            part.string("text", "message", "delta", "summary", "status", "patch", "unified_diff")
+                ?.takeIf { it.isNotBlank() }
         }
     }
 

@@ -118,6 +118,7 @@ class RpcTransportParser {
 
     private fun parseThreadSummary(threadObject: JsonObject, forceArchived: Boolean? = null): ThreadSummary? {
         val id = threadObject.string("id") ?: return null
+        val metadata = threadObject["metadata"] as? JsonObject
         val archivedState = forceArchived
             ?: threadObject.bool("archived", "isArchived", "is_archived")
             ?: when (threadObject.string("syncState", "sync_state")?.lowercase()) {
@@ -131,7 +132,35 @@ class RpcTransportParser {
             preview = threadObject.string("preview"),
             cwd = threadObject.string("cwd", "current_working_directory", "working_directory"),
             updatedAtMillis = threadObject.timestampMillis("updatedAt", "updated_at"),
-            isArchived = archivedState
+            isArchived = archivedState,
+            parentThreadId = normalizedIdentifier(
+                threadObject.string("parentThreadId", "parent_thread_id")
+                    ?: metadata?.string("parentThreadId", "parent_thread_id")
+            ),
+            forkedFromThreadId = normalizedIdentifier(
+                threadObject.string("forkedFromThreadId", "forked_from_thread_id", "forkedFromId", "forked_from_id")
+                    ?: metadata?.string("forkedFromThreadId", "forked_from_thread_id", "forkedFromId", "forked_from_id")
+            ),
+            agentId = normalizedIdentifier(
+                threadObject.string("agentId", "agent_id")
+                    ?: metadata?.string("agentId", "agent_id")
+            ),
+            agentNickname = normalizedIdentifier(
+                threadObject.string("agentNickname", "agent_nickname")
+                    ?: metadata?.string("agentNickname", "agent_nickname", "nickname")
+            ),
+            agentRole = normalizedIdentifier(
+                threadObject.string("agentRole", "agent_role")
+                    ?: metadata?.string("agentRole", "agent_role", "agentType", "agent_type")
+            ),
+            model = normalizedIdentifier(
+                threadObject.string("model", "modelName", "model_name")
+                    ?: metadata?.string("model", "modelName", "model_name")
+            ),
+            modelProvider = normalizedIdentifier(
+                threadObject.string("modelProvider", "model_provider")
+                    ?: metadata?.string("modelProvider", "model_provider", "modelProviderId", "model_provider_id")
+            )
         )
     }
 
@@ -165,6 +194,33 @@ class RpcTransportParser {
             return "Context compacted"
         }
 
+        if (enteredReview == "plan") {
+            return itemObject.string("title", "summary", "status") ?: "Plan updated."
+        }
+
+        if (enteredReview == "reasoning") {
+            return itemObject.string("summary", "title") ?: "Thinking..."
+        }
+
+        if (enteredReview == "toolcall") {
+            val tool = itemObject.string("tool", "name", "command")
+            return if (tool.isNullOrBlank()) "Tool call updated." else "Tool call: $tool"
+        }
+
+        if (enteredReview == "filechange") {
+            val path = itemObject.string("path", "file", "relativePath", "relative_path")
+            return if (path.isNullOrBlank()) "File changes updated." else "File change: $path"
+        }
+
+        if (enteredReview == "commandexecution") {
+            val command = itemObject.string("command", "title", "summary")
+            return if (command.isNullOrBlank()) "Command execution updated." else "Command: $command"
+        }
+
+        if (enteredReview == "diff") {
+            return "Diff updated."
+        }
+
         return ""
     }
 
@@ -185,6 +241,11 @@ class RpcTransportParser {
             }
         }
         return null
+    }
+
+    private fun normalizedIdentifier(value: String?): String? {
+        val normalized = value?.trim().orEmpty()
+        return normalized.takeIf { it.isNotEmpty() }
     }
 
     private fun JsonObject.timestampMillis(vararg keys: String): Long? {

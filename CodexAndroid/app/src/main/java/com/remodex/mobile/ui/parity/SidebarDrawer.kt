@@ -49,6 +49,7 @@ fun SidebarDrawerContent(
     loggerMaxLines: Int,
     onLoggerLevelChanged: (LoggerLevel) -> Unit,
     onLoggerMaxLinesChanged: (Int) -> Unit,
+    onOpenSettings: () -> Unit,
     onGitPull: () -> Unit,
     onGitPush: () -> Unit,
     onRenameThread: (threadId: String, name: String) -> Unit,
@@ -63,6 +64,9 @@ fun SidebarDrawerContent(
     var renameThreadId by rememberSaveable { mutableStateOf<String?>(null) }
     var renameInput by rememberSaveable { mutableStateOf("") }
     var showProjectChooser by rememberSaveable { mutableStateOf(false) }
+    val collapsedSubagentParentIds = rememberSaveable {
+        mutableStateOf(setOf<String>())
+    }
     val threadGroups = remember(threads, threadSearchQuery) {
         groupThreadsByProject(threads, threadSearchQuery)
     }
@@ -142,6 +146,10 @@ fun SidebarDrawerContent(
                 )
             } else {
                 threadGroups.forEach { group ->
+                    val hierarchyRows = flattenThreadHierarchy(
+                        threads = group.threads,
+                        collapsedParentIds = collapsedSubagentParentIds.value
+                    )
                     Text(
                         text = "${group.label} (${group.threads.size})",
                         style = MaterialTheme.typography.titleSmall,
@@ -158,11 +166,26 @@ fun SidebarDrawerContent(
                             }
                         }
                     }
-                    group.threads.forEach { thread ->
+                    hierarchyRows.forEach { hierarchyRow ->
+                        val thread = hierarchyRow.thread
                         ThreadRow(
                             thread = thread,
                             isSelected = selectedThreadId == thread.id,
-                            onClick = { onOpenThread(thread.id) }
+                            onClick = { onOpenThread(thread.id) },
+                            depth = hierarchyRow.depth,
+                            childCount = hierarchyRow.childCount,
+                            isChildrenExpanded = !collapsedSubagentParentIds.value.contains(thread.id),
+                            onToggleChildren = if (hierarchyRow.childCount > 0) {
+                                {
+                                    collapsedSubagentParentIds.value = collapsedSubagentParentIds.value.toMutableSet().also { ids ->
+                                        if (!ids.add(thread.id)) {
+                                            ids.remove(thread.id)
+                                        }
+                                    }
+                                }
+                            } else {
+                                null
+                            }
                         )
                         if (renameThreadId == thread.id) {
                             OutlinedTextField(
@@ -290,6 +313,12 @@ fun SidebarDrawerContent(
             title = "Settings",
             subtitle = "Typography, tone, and logger."
         ) {
+            Button(
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Open Settings")
+            }
             Text("Font: ${fontStyle.title}", style = MaterialTheme.typography.bodySmall)
             Row(
                 modifier = Modifier.fillMaxWidth(),

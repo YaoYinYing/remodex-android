@@ -134,4 +134,50 @@ class RpcTransportParserTest {
         assertEquals(TimelineRole.SYSTEM, timeline[2].role)
         assertTrue(timeline[2].text.contains("thinking"))
     }
+
+    @Test
+    fun parseThreadListExtractsParentForkAndAgentMetadata() {
+        val result = JsonObject(
+            mapOf(
+                "threads" to JsonArray(
+                    listOf(
+                        JsonObject(
+                            mapOf(
+                                "id" to JsonPrimitive("thread-parent"),
+                                "title" to JsonPrimitive("Parent"),
+                                "model" to JsonPrimitive("gpt-5.4")
+                            )
+                        ),
+                        JsonObject(
+                            mapOf(
+                                "id" to JsonPrimitive("thread-child"),
+                                "name" to JsonPrimitive("Child"),
+                                "parent_thread_id" to JsonPrimitive("thread-parent"),
+                                "metadata" to JsonObject(
+                                    mapOf(
+                                        "forked_from_thread_id" to JsonPrimitive("thread-origin"),
+                                        "agent_nickname" to JsonPrimitive("Scout"),
+                                        "agent_role" to JsonPrimitive("explorer"),
+                                        "model_provider" to JsonPrimitive("openai")
+                                    )
+                                )
+                            )
+                        )
+                    )
+                )
+            )
+        )
+
+        val parsed = parser.parseThreadList(result)
+        assertEquals(2, parsed.size)
+
+        val child = parsed.first { it.id == "thread-child" }
+        assertEquals("thread-parent", child.parentThreadId)
+        assertEquals("thread-origin", child.forkedFromThreadId)
+        assertEquals("Scout", child.agentNickname)
+        assertEquals("explorer", child.agentRole)
+        assertEquals("openai", child.modelProvider)
+        assertTrue(child.isSubagent)
+        assertTrue(child.isForkedThread)
+    }
 }

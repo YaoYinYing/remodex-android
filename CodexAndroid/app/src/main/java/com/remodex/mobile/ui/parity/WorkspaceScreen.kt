@@ -131,6 +131,7 @@ fun WorkspaceScreen(
         }
     }
     var queuePaused by rememberSaveable { mutableStateOf(false) }
+    var showSettingsView by rememberSaveable { mutableStateOf(false) }
     val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
     var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
@@ -299,6 +300,10 @@ fun WorkspaceScreen(
                     loggerMaxLines = loggerMaxLines,
                     onLoggerLevelChanged = onLoggerLevelChanged,
                     onLoggerMaxLinesChanged = onLoggerMaxLinesChanged,
+                    onOpenSettings = {
+                        scope.launch { runCatching { drawerState.close() } }
+                        showSettingsView = true
+                    },
                     onGitPull = {
                         scope.launch { runCatching { service.gitPull() } }
                     },
@@ -374,8 +379,35 @@ fun WorkspaceScreen(
                     progress = refreshGestureDelta
                 )
 
-                if (selectedThread == null) {
+                if (showSettingsView) {
+                    WorkspaceSettingsScreen(
+                        connectionState = connectionState,
+                        status = status,
+                        selectedModel = selectedModel,
+                        availableModels = availableModels,
+                        currentProjectPath = normalizedProjectPath,
+                        notificationsEnabled = notificationsEnabled,
+                        fontStyle = fontStyle,
+                        toneMode = toneMode,
+                        loggerLevel = loggerLevel,
+                        loggerMaxLines = loggerMaxLines,
+                        onClose = { showSettingsView = false },
+                        onRequestNotificationPermission = onRequestNotificationPermission,
+                        onFontStyleChanged = onFontStyleChanged,
+                        onToneModeChanged = onToneModeChanged,
+                        onLoggerLevelChanged = onLoggerLevelChanged,
+                        onLoggerMaxLinesChanged = onLoggerMaxLinesChanged,
+                        onSwitchModel = { model ->
+                            scope.launch { runCatching { service.switchModel(model) } }
+                        },
+                        onDisconnect = {
+                            scope.launch { runCatching { service.disconnect() } }
+                            showSettingsView = false
+                        }
+                    )
+                } else if (selectedThread == null) {
                     EmptyWorkspaceHome(
+                        connectionState = connectionState,
                         status = status,
                         projectPath = normalizedProjectPath,
                         rateLimitInfo = rateLimitInfo,
@@ -538,8 +570,46 @@ fun WorkspaceScreen(
                                         scope.launch { runCatching { service.forceRefreshWorkspace() } }
                                     }
 
+                                    "/resume" -> {
+                                        scope.launch {
+                                            runCatching { service.threadResume(selectedThreadId) }
+                                        }
+                                    }
+
+                                    "/fork" -> {
+                                        scope.launch {
+                                            runCatching { service.threadFork(selectedThreadId) }
+                                        }
+                                    }
+
+                                    "/review" -> {
+                                        scope.launch {
+                                            runCatching { service.reviewStart(selectedThreadId) }
+                                        }
+                                    }
+
+                                    "/subagents" -> {
+                                        onComposerInputChange("/subagents ")
+                                    }
+
+                                    "/steer" -> {
+                                        val steerInput = composerInput
+                                            .removePrefix("/steer")
+                                            .trim()
+                                        if (steerInput.isNotEmpty()) {
+                                            scope.launch {
+                                                runCatching { service.turnSteer(steerInput) }
+                                            }
+                                            onComposerInputChange("")
+                                        } else {
+                                            onComposerInputChange("/steer ")
+                                        }
+                                    }
+
                                     else -> {
-                                        onComposerInputChange("Help: use @files, \$skills, /status, /new, /refresh.")
+                                        onComposerInputChange(
+                                            "Help: use @files, \$skills, /status, /new, /refresh, /resume, /fork, /review, /subagents, /steer."
+                                        )
                                     }
                                 }
                                 fileSuggestions = emptyList()
@@ -709,6 +779,7 @@ private fun CompactRefreshStrip(
 
 @Composable
 private fun EmptyWorkspaceHome(
+    connectionState: ConnectionState,
     status: String,
     projectPath: String?,
     rateLimitInfo: String,
@@ -723,6 +794,7 @@ private fun EmptyWorkspaceHome(
         verticalArrangement = Arrangement.Center
     ) {
         EmptyHomeCard(
+            connectionState = connectionState,
             status = status,
             projectPath = projectPath,
             rateLimitInfo = rateLimitInfo,

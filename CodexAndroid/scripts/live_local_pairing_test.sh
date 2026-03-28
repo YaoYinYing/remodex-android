@@ -113,6 +113,15 @@ if [[ "${SKIP_BUILD}" != "true" ]]; then
   "${ADB_ARGS[@]}" install -r "${APK_PATH}"
 fi
 
+if ! "${ADB_ARGS[@]}" shell pm path "${APP_PACKAGE}" 2>/dev/null | grep -q '^package:'; then
+  if [[ ! -f "${APK_PATH}" ]]; then
+    echo "[live-test] failed: APK missing at ${APK_PATH}; build first or remove --skip-build." >&2
+    exit 1
+  fi
+  echo "[live-test] app package not found on device; installing APK"
+  "${ADB_ARGS[@]}" install -r "${APK_PATH}"
+fi
+
 echo "[live-test] starting run-local-remodex on hostname=${RELAY_HOSTNAME} port=${RELAY_PORT}"
 (
   cd "${ROOT_DIR}"

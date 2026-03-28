@@ -38,8 +38,10 @@ class ParityUiInstrumentationTest {
                 OnboardingScreen(onContinue = {})
             }
         }
+        composeRule.onNodeWithText("Get Started").assertIsDisplayed()
+        composeRule.onNodeWithText("Get Started").performClick()
+        composeRule.onNodeWithText("Set Up").performClick()
         composeRule.onNodeWithText("npm install -g @openai/codex@latest").assertIsDisplayed()
-        composeRule.onNodeWithText("Continue to Pairing").assertIsDisplayed()
     }
 
     @Test
@@ -66,8 +68,8 @@ class ParityUiInstrumentationTest {
                 )
             }
         }
-        composeRule.onNodeWithText("Remember Pair").assertIsDisplayed()
-        composeRule.onNodeWithText("Connect Live").assertIsDisplayed()
+        composeRule.onNodeWithText("Scan QR").assertIsDisplayed()
+        composeRule.onNodeWithText("Enter Details Manually").assertIsDisplayed()
     }
 
     @Test
@@ -107,11 +109,6 @@ class ParityUiInstrumentationTest {
                     loggerMaxLines = 3000,
                     onLoggerLevelChanged = {},
                     onLoggerMaxLinesChanged = {},
-                    onRenameThread = { _, _ -> },
-                    onArchiveThread = {},
-                    onUnarchiveThread = {},
-                    onDeleteThreadLocally = {},
-                    onArchiveProjectGroup = {},
                     onHeaderTap = {}
                 )
             }
@@ -120,6 +117,53 @@ class ParityUiInstrumentationTest {
         composeRule.onNodeWithTag("workspace_refresh_strip").assertIsDisplayed()
         composeRule.onNodeWithText("Menu").performClick()
         composeRule.onNodeWithText("Sidebar").assertIsDisplayed()
+    }
+
+    @Test
+    fun workspaceSettingsRouteOpensFromDrawer() {
+        val service = CodexService()
+
+        composeRule.setContent {
+            RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_LIGHT) {
+                WorkspaceScreen(
+                    service = service,
+                    connectionState = ConnectionState.Connected,
+                    status = "Connected",
+                    currentProjectPath = "/Users/yyy/Documents/protein_design/remodex",
+                    availableModels = listOf("gpt-5.4"),
+                    selectedModel = "gpt-5.4",
+                    pendingPermissions = emptyList(),
+                    rateLimitInfo = "Rate limit: 177/200",
+                    ciStatus = "CI status: running",
+                    gitStatusSummary = "Branch main clean",
+                    gitBranches = listOf("main"),
+                    checkoutBranch = "",
+                    onCheckoutBranchChange = {},
+                    commitMessage = "",
+                    onCommitMessageChange = {},
+                    threads = emptyList(),
+                    selectedThreadId = null,
+                    timeline = emptyList(),
+                    composerInput = "",
+                    onComposerInputChange = {},
+                    notificationsEnabled = true,
+                    onRequestNotificationPermission = {},
+                    fontStyle = AppFontStyle.GEIST,
+                    toneMode = AppToneMode.FORCE_LIGHT,
+                    onFontStyleChanged = {},
+                    onToneModeChanged = {},
+                    loggerLevel = LoggerLevel.INFO,
+                    loggerMaxLines = 3000,
+                    onLoggerLevelChanged = {},
+                    onLoggerMaxLinesChanged = {},
+                    onHeaderTap = {}
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Menu").performClick()
+        composeRule.onNodeWithText("Open Settings").performClick()
+        composeRule.onNodeWithText("Runtime Defaults").assertIsDisplayed()
     }
 
     @Test

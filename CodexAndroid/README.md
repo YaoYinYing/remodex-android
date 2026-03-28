@@ -36,6 +36,7 @@ Native Android client foundation for full-parity Remodex delivery.
 - Android notification pipeline for status changes, permission requirements, rate-limit hits, git actions, and CI/CD updates
 - Pinned website-derived TODO lane in-app, advanced sequentially (`DONE`/`IN_PROGRESS`/`TODO`)
 - Parity gate document: [`docs/parity-acceptance-matrix.md`](docs/parity-acceptance-matrix.md)
+- iOS + website parity checklist for this iteration: [`docs/ios-web-parity-todo.md`](docs/ios-web-parity-todo.md)
 - Compose UI instrumentation suite for parity shells and gesture interactions
 - Lower-latency fixture transport simulation and periodic background sync loop to reduce perceived transport delay
 

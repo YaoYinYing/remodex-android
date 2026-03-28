@@ -7,7 +7,14 @@ data class ThreadSummary(
     val preview: String?,
     val cwd: String?,
     val updatedAtMillis: Long?,
-    val isArchived: Boolean = false
+    val isArchived: Boolean = false,
+    val parentThreadId: String? = null,
+    val forkedFromThreadId: String? = null,
+    val agentId: String? = null,
+    val agentNickname: String? = null,
+    val agentRole: String? = null,
+    val model: String? = null,
+    val modelProvider: String? = null
 ) {
     val displayTitle: String
         get() {
@@ -27,5 +34,21 @@ data class ThreadSummary(
             }
 
             return "New Thread"
+        }
+
+    val isSubagent: Boolean
+        get() = !parentThreadId.isNullOrBlank()
+
+    val isForkedThread: Boolean
+        get() = !forkedFromThreadId.isNullOrBlank()
+
+    val agentDisplayLabel: String?
+        get() {
+            val nickname = agentNickname?.trim().orEmpty()
+            if (nickname.isNotEmpty()) {
+                val role = agentRole?.trim().orEmpty()
+                return if (role.isNotEmpty()) "$nickname ($role)" else nickname
+            }
+            return null
         }
 }
