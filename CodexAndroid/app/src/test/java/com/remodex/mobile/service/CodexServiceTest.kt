@@ -341,6 +341,41 @@ class CodexServiceTest {
         assertTrue(skills.any { it.name == "openai-docs" })
     }
 
+    @Test
+    fun renameArchiveAndDeleteThreadLifecycleWorksInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        service.renameThread("thread-alpha", "Renamed Alpha")
+        assertTrue(
+            service.threads.value.any { it.id == "thread-alpha" && it.displayTitle == "Renamed Alpha" }
+        )
+
+        service.archiveThread("thread-alpha")
+        assertTrue(
+            service.threads.value.any { it.id == "thread-alpha" && it.isArchived }
+        )
+
+        service.unarchiveThread("thread-alpha")
+        assertTrue(
+            service.threads.value.any { it.id == "thread-alpha" && !it.isArchived }
+        )
+
+        service.deleteThreadLocally("thread-alpha")
+        assertTrue(
+            service.threads.value.none { it.id == "thread-alpha" }
+        )
+    }
+
     private class InMemoryPairingStore(
         private var payload: PairingPayload? = null
     ) : PairingStateStore {

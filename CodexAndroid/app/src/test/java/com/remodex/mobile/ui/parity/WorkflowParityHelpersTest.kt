@@ -56,12 +56,22 @@ class WorkflowParityHelpersTest {
                 preview = null,
                 cwd = "/repo/two",
                 updatedAtMillis = 10
+            ),
+            ThreadSummary(
+                id = "d",
+                title = "D",
+                name = null,
+                preview = null,
+                cwd = "/repo/two",
+                updatedAtMillis = 40,
+                isArchived = true
             )
         )
 
         val groups = groupThreadsByProject(threads, query = "")
-        assertEquals(2, groups.size)
+        assertEquals(3, groups.size)
         assertEquals("/repo/one", groups.first().projectPath)
         assertEquals(2, groups.first().threads.size)
+        assertTrue(groups.any { it.kind == ThreadProjectGroupKind.ARCHIVED && it.threads.size == 1 })
     }
 }

@@ -308,6 +308,13 @@ fun ThreadRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            if (thread.isArchived) {
+                Text(
+                    text = "Archived",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (!thread.preview.isNullOrBlank()) {
                 Text(
                     text = thread.preview,

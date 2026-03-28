@@ -6,7 +6,8 @@ data class ThreadSummary(
     val name: String?,
     val preview: String?,
     val cwd: String?,
-    val updatedAtMillis: Long?
+    val updatedAtMillis: Long?,
+    val isArchived: Boolean = false
 ) {
     val displayTitle: String
         get() {

@@ -18,6 +18,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -50,13 +51,22 @@ fun SidebarDrawerContent(
     onLoggerMaxLinesChanged: (Int) -> Unit,
     onGitPull: () -> Unit,
     onGitPush: () -> Unit,
+    onRenameThread: (threadId: String, name: String) -> Unit,
+    onArchiveThread: (threadId: String) -> Unit,
+    onUnarchiveThread: (threadId: String) -> Unit,
+    onDeleteThreadLocally: (threadId: String) -> Unit,
+    onArchiveProjectGroup: (threadIds: List<String>) -> Unit,
     onDisconnect: () -> Unit
 ) {
     var loggerLinesInput by remember { mutableStateOf(loggerMaxLines.toString()) }
     var threadSearchQuery by remember { mutableStateOf("") }
+    var renameThreadId by rememberSaveable { mutableStateOf<String?>(null) }
+    var renameInput by rememberSaveable { mutableStateOf("") }
+    var showProjectChooser by rememberSaveable { mutableStateOf(false) }
     val threadGroups = remember(threads, threadSearchQuery) {
         groupThreadsByProject(threads, threadSearchQuery)
     }
+    val projectGroups = threadGroups.filter { it.kind == ThreadProjectGroupKind.PROJECT && it.projectPath != null }
     val currentProjectGroupPath = currentProjectPath
         .takeUnless { it == "Project path not resolved." }
         ?.trim()
@@ -98,10 +108,26 @@ fun SidebarDrawerContent(
                     Text("New in Current Project")
                 }
                 OutlinedButton(
-                    onClick = { onStartThread(null) },
+                    onClick = { showProjectChooser = !showProjectChooser },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("New Chat")
+                    Text(if (showProjectChooser) "Hide Projects" else "Choose Project")
+                }
+            }
+            if (showProjectChooser) {
+                projectGroups.forEach { group ->
+                    OutlinedButton(
+                        onClick = { onStartThread(group.projectPath) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("New Chat in ${group.label}")
+                    }
+                }
+                OutlinedButton(
+                    onClick = { onStartThread(null) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("New Chat (No Project)")
                 }
             }
 
@@ -118,20 +144,94 @@ fun SidebarDrawerContent(
                         style = MaterialTheme.typography.titleSmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    if (group.projectPath != null) {
+                    if (group.kind == ThreadProjectGroupKind.PROJECT && group.projectPath != null) {
                         OutlinedButton(
                             onClick = { onStartThread(group.projectPath) },
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("New Chat in ${group.label}")
                         }
+                        val liveGroupThreadIds = group.threads
+                            .filterNot { it.isArchived }
+                            .map { it.id }
+                        if (liveGroupThreadIds.size > 1) {
+                            OutlinedButton(
+                                onClick = { onArchiveProjectGroup(liveGroupThreadIds) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Archive Project Chats")
+                            }
+                        }
                     }
-                    group.threads.take(8).forEach { thread ->
+                    group.threads.forEach { thread ->
                         ThreadRow(
                             thread = thread,
                             isSelected = selectedThreadId == thread.id,
                             onClick = { onOpenThread(thread.id) }
                         )
+                        if (renameThreadId == thread.id) {
+                            OutlinedTextField(
+                                value = renameInput,
+                                onValueChange = { renameInput = it },
+                                label = { Text("Thread Name") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val normalizedName = renameInput.trim()
+                                        if (normalizedName.isNotEmpty()) {
+                                            onRenameThread(thread.id, normalizedName)
+                                            renameThreadId = null
+                                            renameInput = ""
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Save")
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        renameThreadId = null
+                                        renameInput = ""
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Cancel")
+                                }
+                            }
+                        } else {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        renameThreadId = thread.id
+                                        renameInput = thread.displayTitle
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Rename")
+                                }
+                                OutlinedButton(
+                                    onClick = {
+                                        if (thread.isArchived) {
+                                            onUnarchiveThread(thread.id)
+                                        } else {
+                                            onArchiveThread(thread.id)
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text(if (thread.isArchived) "Unarchive" else "Archive")
+                                }
+                                OutlinedButton(
+                                    onClick = { onDeleteThreadLocally(thread.id) },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Delete")
+                                }
+                            }
+                        }
                     }
                 }
             }

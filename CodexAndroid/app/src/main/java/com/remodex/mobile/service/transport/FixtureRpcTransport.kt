@@ -47,6 +47,7 @@ class FixtureRpcTransport : RpcTransport {
         "remodex/android-parity",
         "remodex/push-parity"
     )
+    private val archivedThreadIds = mutableSetOf<String>()
 
     private val threadSummaries = mutableListOf(
         JsonObject(
@@ -159,9 +160,12 @@ class FixtureRpcTransport : RpcTransport {
         }
         return when (method) {
             "initialized" -> fixtureInitialized()
-            "thread/list" -> fixtureThreadList()
+            "thread/list" -> fixtureThreadList(params)
             "thread/read" -> fixtureThreadRead(params)
             "thread/start" -> fixtureThreadStart(params)
+            "thread/name/set" -> fixtureThreadNameSet(params)
+            "thread/archive" -> fixtureThreadArchive(params)
+            "thread/unarchive" -> fixtureThreadUnarchive(params)
             "turn/start" -> fixtureTurnStart(params)
             "turn/interrupt" -> fixtureTurnInterrupt(params)
             "notifications/push/register" -> fixturePushRegister(params)
@@ -225,9 +229,15 @@ class FixtureRpcTransport : RpcTransport {
         )
     }
 
-    private fun fixtureThreadList(): RpcMessage {
+    private fun fixtureThreadList(params: JsonObject): RpcMessage {
         consumeQuota(1)
-        val threads = JsonArray(threadSummaries)
+        val archivedOnly = (params["archived"] as? JsonPrimitive)?.contentOrNull?.trim() == "true"
+        val filtered = threadSummaries.filter { thread ->
+            val id = (thread["id"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+            val isArchived = archivedThreadIds.contains(id)
+            if (archivedOnly) isArchived else !isArchived
+        }
+        val threads = JsonArray(filtered)
         return RpcMessage(
             jsonrpc = "2.0",
             id = JsonPrimitive("fixture-thread-list"),
@@ -356,6 +366,7 @@ class FixtureRpcTransport : RpcTransport {
         )
         threadSummaries.add(0, thread)
         turnsByThread[threadId] = mutableListOf()
+        archivedThreadIds.remove(threadId)
 
         return RpcMessage(
             jsonrpc = "2.0",
@@ -461,20 +472,110 @@ class FixtureRpcTransport : RpcTransport {
         consumeQuota(1)
         val threadId = (params["threadId"] as? JsonPrimitive)?.contentOrNull ?: "thread-alpha"
         val turns = JsonArray(turnsByThread[threadId].orEmpty())
+        val summary = threadSummaries.firstOrNull { summary ->
+            (summary["id"] as? JsonPrimitive)?.contentOrNull == threadId
+        }
+        val cwd = summary
+            ?.let { (it["cwd"] as? JsonPrimitive)?.contentOrNull }
+            ?.takeIf { it.isNotBlank() }
+            ?: summary
+                ?.let { (it["current_working_directory"] as? JsonPrimitive)?.contentOrNull }
+                ?.takeIf { it.isNotBlank() }
         return RpcMessage(
             jsonrpc = "2.0",
             id = JsonPrimitive("fixture-thread-read-$threadId"),
             result = JsonObject(
                 mapOf(
                     "thread" to JsonObject(
-                        mapOf(
-                            "id" to JsonPrimitive(threadId),
-                            "turns" to turns
-                        )
+                        buildMap {
+                            put("id", JsonPrimitive(threadId))
+                            put("turns", turns)
+                            if (!cwd.isNullOrBlank()) {
+                                put("cwd", JsonPrimitive(cwd))
+                            }
+                        }
                     )
                 )
             )
         )
+    }
+
+    private fun fixtureThreadNameSet(params: JsonObject): RpcMessage {
+        consumeQuota(1)
+        val threadId = (params["threadId"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        val name = (params["name"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        if (threadId.isEmpty() || name.isEmpty()) {
+            return RpcMessage(
+                jsonrpc = "2.0",
+                id = JsonPrimitive("fixture-thread-name-set"),
+                error = RpcError(code = -32602, message = "threadId and name are required.")
+            )
+        }
+        val index = threadSummaries.indexOfFirst { summary ->
+            (summary["id"] as? JsonPrimitive)?.contentOrNull == threadId
+        }
+        if (index >= 0) {
+            val mutable = threadSummaries[index].toMutableMap()
+            mutable["name"] = JsonPrimitive(name)
+            mutable["title"] = JsonPrimitive(name)
+            mutable["updated_at"] = JsonPrimitive(System.currentTimeMillis())
+            threadSummaries[index] = JsonObject(mutable)
+        }
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-thread-name-set-$threadId"),
+            result = JsonObject(
+                mapOf(
+                    "ok" to JsonPrimitive(true),
+                    "threadId" to JsonPrimitive(threadId),
+                    "name" to JsonPrimitive(name)
+                )
+            )
+        )
+    }
+
+    private fun fixtureThreadArchive(params: JsonObject): RpcMessage {
+        consumeQuota(1)
+        val threadId = (params["threadId"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        val unarchive = (params["unarchive"] as? JsonPrimitive)?.contentOrNull?.trim() == "true"
+        if (threadId.isEmpty()) {
+            return RpcMessage(
+                jsonrpc = "2.0",
+                id = JsonPrimitive("fixture-thread-archive"),
+                error = RpcError(code = -32602, message = "threadId is required.")
+            )
+        }
+        if (unarchive) {
+            archivedThreadIds.remove(threadId)
+        } else {
+            archivedThreadIds.add(threadId)
+        }
+        val index = threadSummaries.indexOfFirst { summary ->
+            (summary["id"] as? JsonPrimitive)?.contentOrNull == threadId
+        }
+        if (index >= 0) {
+            val mutable = threadSummaries[index].toMutableMap()
+            mutable["updated_at"] = JsonPrimitive(System.currentTimeMillis())
+            threadSummaries[index] = JsonObject(mutable)
+        }
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-thread-archive-$threadId"),
+            result = JsonObject(
+                mapOf(
+                    "ok" to JsonPrimitive(true),
+                    "threadId" to JsonPrimitive(threadId),
+                    "archived" to JsonPrimitive(!unarchive)
+                )
+            )
+        )
+    }
+
+    private fun fixtureThreadUnarchive(params: JsonObject): RpcMessage {
+        val adjusted = JsonObject(
+            params.toMutableMap().also { it["unarchive"] = JsonPrimitive(true) }
+        )
+        return fixtureThreadArchive(adjusted)
     }
 
     private fun fixtureTurnInterrupt(params: JsonObject): RpcMessage {

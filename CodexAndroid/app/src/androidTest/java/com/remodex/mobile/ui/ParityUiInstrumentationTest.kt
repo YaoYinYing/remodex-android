@@ -105,6 +105,11 @@ class ParityUiInstrumentationTest {
                     loggerMaxLines = 3000,
                     onLoggerLevelChanged = {},
                     onLoggerMaxLinesChanged = {},
+                    onRenameThread = { _, _ -> },
+                    onArchiveThread = {},
+                    onUnarchiveThread = {},
+                    onDeleteThreadLocally = {},
+                    onArchiveProjectGroup = {},
                     onHeaderTap = {}
                 )
             }

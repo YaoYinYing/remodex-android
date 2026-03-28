@@ -11,7 +11,7 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
 class RpcTransportParser {
-    fun parseThreadList(result: JsonObject): List<ThreadSummary> {
+    fun parseThreadList(result: JsonObject, forceArchived: Boolean? = null): List<ThreadSummary> {
         val page = (result["data"] as? JsonArray)
             ?: (result["items"] as? JsonArray)
             ?: (result["threads"] as? JsonArray)
@@ -19,7 +19,7 @@ class RpcTransportParser {
 
         return page.mapNotNull { element ->
             val threadObject = element as? JsonObject ?: return@mapNotNull null
-            parseThreadSummary(threadObject)
+            parseThreadSummary(threadObject, forceArchived = forceArchived)
         }
     }
 
@@ -76,15 +76,22 @@ class RpcTransportParser {
         return output
     }
 
-    private fun parseThreadSummary(threadObject: JsonObject): ThreadSummary? {
+    private fun parseThreadSummary(threadObject: JsonObject, forceArchived: Boolean? = null): ThreadSummary? {
         val id = threadObject.string("id") ?: return null
+        val archivedState = forceArchived
+            ?: threadObject.bool("archived", "isArchived", "is_archived")
+            ?: when (threadObject.string("syncState", "sync_state")?.lowercase()) {
+                "archived", "archived_local" -> true
+                else -> false
+            }
         return ThreadSummary(
             id = id,
             title = threadObject.string("title"),
             name = threadObject.string("name"),
             preview = threadObject.string("preview"),
             cwd = threadObject.string("cwd", "current_working_directory", "working_directory"),
-            updatedAtMillis = threadObject.timestampMillis("updatedAt", "updated_at")
+            updatedAtMillis = threadObject.timestampMillis("updatedAt", "updated_at"),
+            isArchived = archivedState
         )
     }
 
@@ -148,6 +155,20 @@ class RpcTransportParser {
                 ?: primitive.contentOrNull?.toDoubleOrNull()?.toLong()
                 ?: continue
             return if (numericValue > 10_000_000_000L) numericValue else numericValue * 1_000L
+        }
+        return null
+    }
+
+    private fun JsonObject.bool(vararg keys: String): Boolean? {
+        for (key in keys) {
+            val primitive = this[key] as? JsonPrimitive ?: continue
+            primitive.contentOrNull?.trim()?.lowercase()?.let { value ->
+                when (value) {
+                    "true", "1", "yes", "y" -> return true
+                    "false", "0", "no", "n" -> return false
+                    else -> Unit
+                }
+            }
         }
         return null
     }

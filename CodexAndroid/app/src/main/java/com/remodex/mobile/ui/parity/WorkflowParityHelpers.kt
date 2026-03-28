@@ -2,9 +2,15 @@ package com.remodex.mobile.ui.parity
 
 import com.remodex.mobile.model.ThreadSummary
 
+enum class ThreadProjectGroupKind {
+    PROJECT,
+    ARCHIVED
+}
+
 data class ThreadProjectGroup(
     val id: String,
     val label: String,
+    val kind: ThreadProjectGroupKind,
     val projectPath: String?,
     val threads: List<ThreadSummary>,
     val latestUpdatedAtMillis: Long
@@ -25,11 +31,14 @@ fun groupThreadsByProject(
         }
     }
 
-    val grouped = filteredThreads.groupBy { thread ->
+    val archivedThreads = filteredThreads.filter { it.isArchived }
+    val liveThreads = filteredThreads.filterNot { it.isArchived }
+
+    val grouped = liveThreads.groupBy { thread ->
         normalizeProjectPath(thread.cwd) ?: "cloud"
     }
 
-    return grouped.map { (projectKey, projectThreads) ->
+    val projectGroups = grouped.map { (projectKey, projectThreads) ->
         val sortedThreads = projectThreads.sortedWith(
             compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
                 .thenBy { it.id }
@@ -39,6 +48,7 @@ fun groupThreadsByProject(
         ThreadProjectGroup(
             id = "project:$projectKey",
             label = projectLabelForPath(projectPath),
+            kind = ThreadProjectGroupKind.PROJECT,
             projectPath = projectPath,
             threads = sortedThreads,
             latestUpdatedAtMillis = latest
@@ -48,6 +58,23 @@ fun groupThreadsByProject(
             .thenBy { it.label.lowercase() }
             .thenBy { it.id }
     )
+
+    if (archivedThreads.isEmpty()) {
+        return projectGroups
+    }
+    val sortedArchived = archivedThreads.sortedWith(
+        compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
+            .thenBy { it.id }
+    )
+    val archivedGroup = ThreadProjectGroup(
+        id = "archived",
+        label = "Archived (${sortedArchived.size})",
+        kind = ThreadProjectGroupKind.ARCHIVED,
+        projectPath = null,
+        threads = sortedArchived,
+        latestUpdatedAtMillis = sortedArchived.firstOrNull()?.updatedAtMillis ?: Long.MIN_VALUE
+    )
+    return projectGroups + archivedGroup
 }
 
 data class ComposerCommand(

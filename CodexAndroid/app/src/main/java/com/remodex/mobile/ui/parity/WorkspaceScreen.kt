@@ -62,6 +62,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+private const val MAX_COMPOSER_ATTACHMENTS = 4
+
 @Composable
 fun WorkspaceScreen(
     service: CodexService,
@@ -115,6 +117,7 @@ fun WorkspaceScreen(
     }
     var queuePaused by rememberSaveable { mutableStateOf(false) }
     val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
+    var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
     val galleryPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -132,7 +135,12 @@ fun WorkspaceScreen(
             }
         }.getOrNull()
         if (loaded != null) {
-            mediaAttachments.add(loaded)
+            if (mediaAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
+                attachmentHint = "You can attach up to $MAX_COMPOSER_ATTACHMENTS images per message."
+            } else {
+                mediaAttachments.add(loaded)
+                attachmentHint = null
+            }
         }
     }
     val cameraPreviewLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
@@ -143,7 +151,12 @@ fun WorkspaceScreen(
             )
         }
         if (payload != null) {
-            mediaAttachments.add(payload)
+            if (mediaAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
+                attachmentHint = "You can attach up to $MAX_COMPOSER_ATTACHMENTS images per message."
+            } else {
+                mediaAttachments.add(payload)
+                attachmentHint = null
+            }
         }
     }
 
@@ -298,6 +311,31 @@ fun WorkspaceScreen(
                     onGitPush = {
                         scope.launch {
                             runCatching { service.gitPush() }
+                        }
+                    },
+                    onRenameThread = { threadId, name ->
+                        scope.launch {
+                            runCatching { service.renameThread(threadId, name) }
+                        }
+                    },
+                    onArchiveThread = { threadId ->
+                        scope.launch {
+                            runCatching { service.archiveThread(threadId) }
+                        }
+                    },
+                    onUnarchiveThread = { threadId ->
+                        scope.launch {
+                            runCatching { service.unarchiveThread(threadId) }
+                        }
+                    },
+                    onDeleteThreadLocally = { threadId ->
+                        scope.launch {
+                            runCatching { service.deleteThreadLocally(threadId) }
+                        }
+                    },
+                    onArchiveProjectGroup = { threadIds ->
+                        scope.launch {
+                            runCatching { service.archiveThreadGroup(threadIds) }
                         }
                     },
                     onDisconnect = {
@@ -548,6 +586,7 @@ fun WorkspaceScreen(
                             title = "Chat + Threads",
                             subtitle = "Current project chat context with iOS-matched controls."
                         ) {
+                            val liveThreads = threads.filterNot { it.isArchived }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Button(
                                     onClick = {
@@ -568,14 +607,14 @@ fun WorkspaceScreen(
                                     modifier = Modifier.weight(1f)
                                 ) { Text("Refresh Threads") }
                             }
-                            if (threads.isEmpty()) {
+                            if (liveThreads.isEmpty()) {
                                 Text(
                                     text = "No threads yet.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             } else {
-                                threads.forEach { thread ->
+                                liveThreads.forEach { thread ->
                                     ThreadRow(
                                         thread = thread,
                                         isSelected = selectedThreadId == thread.id,
@@ -635,12 +674,24 @@ fun WorkspaceScreen(
                                 ) {
                                     mediaAttachments.forEach { attachment ->
                                         OutlinedButton(
-                                            onClick = { mediaAttachments.remove(attachment) }
+                                            onClick = {
+                                                mediaAttachments.remove(attachment)
+                                                if (mediaAttachments.size < MAX_COMPOSER_ATTACHMENTS) {
+                                                    attachmentHint = null
+                                                }
+                                            }
                                         ) {
                                             Text(attachment.label ?: "image")
                                         }
                                     }
                                 }
+                            }
+                            if (attachmentHint != null) {
+                                Text(
+                                    text = attachmentHint ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
                             }
                             if (mentionedFiles.isNotEmpty()) {
                                 Row(
@@ -883,6 +934,7 @@ fun WorkspaceScreen(
                                                     mentionedFiles.clear()
                                                     mentionedSkills.clear()
                                                     mediaAttachments.clear()
+                                                    attachmentHint = null
                                                     voiceDraftText = ""
                                                 }
                                         }

@@ -129,6 +129,8 @@ class CodexService(
 
     private val activeTurnIdByThread = mutableMapOf<String, String>()
     private val projectPathByThread = mutableMapOf<String, String>()
+    private val locallyArchivedThreadIds = mutableSetOf<String>()
+    private val locallyDeletedThreadIds = mutableSetOf<String>()
     private val rpcMethodAliasCache = mutableMapOf<String, String>()
     private val unavailableMethodKeyCache = mutableSetOf<String>()
     private var rpcTransport: RpcTransport = FixtureRpcTransport()
@@ -396,7 +398,44 @@ class CodexService(
         throwIfRpcError(response, "thread/list")
         val resultObject = response.result as? JsonObject
             ?: throw IllegalStateException("thread/list result is missing.")
-        val parsedThreads = parser.parseThreadList(resultObject)
+        val liveThreads = parser.parseThreadList(resultObject, forceArchived = false)
+
+        val archivedThreads = runCatching {
+            val archivedResponse = rpcTransport.request(
+                method = "thread/list",
+                params = JsonObject(
+                    mapOf(
+                        "archived" to JsonPrimitive(true),
+                        "sourceKinds" to JsonArray(
+                            listOf("cli", "vscode", "appServer", "exec", "unknown").map(::JsonPrimitive)
+                        )
+                    )
+                )
+            )
+            throwIfRpcError(archivedResponse, "thread/list")
+            val archivedResult = archivedResponse.result as? JsonObject ?: JsonObject(emptyMap())
+            parser.parseThreadList(archivedResult, forceArchived = true)
+        }.getOrDefault(emptyList())
+
+        val mergedById = linkedMapOf<String, ThreadSummary>()
+        (liveThreads + archivedThreads).forEach { thread ->
+            mergedById[thread.id] = thread
+        }
+
+        val projectedThreads = mergedById.values
+            .filterNot { locallyDeletedThreadIds.contains(it.id) }
+            .map { thread ->
+                if (locallyArchivedThreadIds.contains(thread.id)) {
+                    thread.copy(isArchived = true)
+                } else {
+                    thread
+                }
+            }
+
+        val parsedThreads = projectedThreads.sortedWith(
+            compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
+                .thenBy { it.id }
+        )
         _threads.value = parsedThreads
         val parsedThreadIds = parsedThreads.map { it.id }.toSet()
         projectPathByThread.keys.retainAll(parsedThreadIds)
@@ -405,10 +444,11 @@ class CodexService(
         }
 
         val selectedThreadId = _selectedThreadId.value
+        val activeThreads = parsedThreads.filterNot { it.isArchived }
         val resolvedSelection = when {
-            parsedThreads.isEmpty() -> null
-            selectedThreadId != null && parsedThreads.any { it.id == selectedThreadId } -> selectedThreadId
-            else -> parsedThreads.first().id
+            activeThreads.isEmpty() -> null
+            selectedThreadId != null && activeThreads.any { it.id == selectedThreadId } -> selectedThreadId
+            else -> activeThreads.first().id
         }
 
         _selectedThreadId.value = resolvedSelection
@@ -462,6 +502,148 @@ class CodexService(
 
         if (!silentStatus) {
             setStatus("Loaded ${parsedTimeline.size} timeline item(s) for $threadId via $activeTransportLabel.")
+        }
+    }
+
+    suspend fun renameThread(threadId: String, newName: String) {
+        ensureConnected()
+        val normalizedThreadId = threadId.trim()
+        if (normalizedThreadId.isEmpty()) {
+            throw IllegalArgumentException("Thread id is required.")
+        }
+        val normalizedName = newName.trim()
+        if (normalizedName.isEmpty()) {
+            throw IllegalArgumentException("Thread name is required.")
+        }
+
+        val responsePair = requestFirstAvailable(
+            methods = listOf("thread/name/set", "thread/rename", "thread/name"),
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(normalizedThreadId),
+                    "name" to JsonPrimitive(normalizedName)
+                )
+            )
+        )
+        if (responsePair == null) {
+            throw IllegalStateException("Relay does not support thread renaming.")
+        }
+
+        _threads.value = _threads.value.map { thread ->
+            if (thread.id == normalizedThreadId) {
+                thread.copy(name = normalizedName, title = normalizedName)
+            } else {
+                thread
+            }
+        }
+        setStatus("Renamed thread $normalizedThreadId via $activeTransportLabel.", notify = true)
+    }
+
+    suspend fun archiveThread(threadId: String) {
+        setThreadArchivedState(threadId = threadId, archived = true, refreshAfter = true)
+        setStatus("Archived thread ${threadId.trim()} via $activeTransportLabel.", notify = true)
+    }
+
+    suspend fun unarchiveThread(threadId: String) {
+        setThreadArchivedState(threadId = threadId, archived = false, refreshAfter = true)
+        setStatus("Unarchived thread ${threadId.trim()} via $activeTransportLabel.", notify = true)
+    }
+
+    suspend fun archiveThreadGroup(threadIds: List<String>) {
+        ensureConnected()
+        val normalizedIds = threadIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (normalizedIds.isEmpty()) {
+            return
+        }
+        normalizedIds.forEach { threadId ->
+            runCatching {
+                setThreadArchivedState(threadId = threadId, archived = true, refreshAfter = false)
+            }
+        }
+        refreshThreads(silentStatus = true, includeTimeline = false)
+        setStatus("Archived ${normalizedIds.size} thread(s) via $activeTransportLabel.", notify = true)
+    }
+
+    suspend fun deleteThreadLocally(threadId: String) {
+        ensureConnected()
+        val normalizedThreadId = threadId.trim()
+        if (normalizedThreadId.isEmpty()) {
+            throw IllegalArgumentException("Thread id is required.")
+        }
+        locallyDeletedThreadIds.add(normalizedThreadId)
+        locallyArchivedThreadIds.remove(normalizedThreadId)
+        projectPathByThread.remove(normalizedThreadId)
+        activeTurnIdByThread.remove(normalizedThreadId)
+        _threads.value = _threads.value.filterNot { it.id == normalizedThreadId }
+        val selectedId = _selectedThreadId.value
+        if (selectedId == normalizedThreadId) {
+            val fallback = _threads.value.firstOrNull { !it.isArchived }?.id
+            _selectedThreadId.value = fallback
+            if (fallback == null) {
+                _timeline.value = emptyList()
+            } else {
+                openThread(fallback, silentStatus = true)
+            }
+        }
+        setStatus("Deleted thread $normalizedThreadId locally.", notify = true)
+    }
+
+    private suspend fun setThreadArchivedState(threadId: String, archived: Boolean, refreshAfter: Boolean) {
+        ensureConnected()
+        val normalizedThreadId = threadId.trim()
+        if (normalizedThreadId.isEmpty()) {
+            throw IllegalArgumentException("Thread id is required.")
+        }
+        if (archived) {
+            val responsePair = requestFirstAvailable(
+                methods = listOf("thread/archive"),
+                params = JsonObject(
+                    mapOf(
+                        "threadId" to JsonPrimitive(normalizedThreadId),
+                        "unarchive" to JsonPrimitive(false)
+                    )
+                )
+            )
+            if (responsePair == null) {
+                throw IllegalStateException("Relay does not support thread archive.")
+            }
+            locallyArchivedThreadIds.add(normalizedThreadId)
+            locallyDeletedThreadIds.remove(normalizedThreadId)
+        } else {
+            val responsePair = requestFirstAvailable(
+                methods = listOf("thread/unarchive", "thread/archive"),
+                params = JsonObject(
+                    mapOf(
+                        "threadId" to JsonPrimitive(normalizedThreadId),
+                        "unarchive" to JsonPrimitive(true)
+                    )
+                )
+            )
+            if (responsePair == null) {
+                throw IllegalStateException("Relay does not support thread unarchive.")
+            }
+            locallyArchivedThreadIds.remove(normalizedThreadId)
+            locallyDeletedThreadIds.remove(normalizedThreadId)
+        }
+
+        _threads.value = _threads.value.map { thread ->
+            if (thread.id == normalizedThreadId) {
+                thread.copy(isArchived = archived)
+            } else {
+                thread
+            }
+        }
+        if (_selectedThreadId.value == normalizedThreadId && archived) {
+            val fallback = _threads.value.firstOrNull { !it.isArchived && it.id != normalizedThreadId }?.id
+            _selectedThreadId.value = fallback
+            if (fallback == null) {
+                _timeline.value = emptyList()
+            } else {
+                openThread(fallback, silentStatus = true)
+            }
+        }
+        if (refreshAfter) {
+            refreshThreads(silentStatus = true, includeTimeline = false)
         }
     }
 
