@@ -51,6 +51,11 @@ function startBridge({
 } = {}) {
   const config = explicitConfig || readBridgeConfig();
   const relayBaseUrl = config.relayUrl.replace(/\/+$/, "");
+  const pairingRelayBaseUrl = (
+    typeof config.pairingRelayUrl === "string" && config.pairingRelayUrl.trim()
+      ? config.pairingRelayUrl
+      : config.relayUrl
+  ).replace(/\/+$/, "");
   if (!relayBaseUrl) {
     console.error("[remodex] No relay URL configured.");
     console.error("[remodex] In a source checkout, run ./run-local-remodex.sh or set REMODEX_RELAY.");
@@ -124,7 +129,7 @@ function startBridge({
   };
   const secureTransport = createBridgeSecureTransport({
     sessionId,
-    relayUrl: relayBaseUrl,
+    relayUrl: pairingRelayBaseUrl || relayBaseUrl,
     deviceState,
     onTrustedPhoneUpdate(nextDeviceState) {
       deviceState = nextDeviceState;
