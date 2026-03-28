@@ -186,6 +186,17 @@ fun RemodexApp(
                         scope.launch {
                             runCatching { service.connectLive() }
                         }
+                    },
+                    onScannedPairing = { scannedPayload ->
+                        relayUrl = scannedPayload.relayUrl
+                        sessionId = scannedPayload.sessionId
+                        macDeviceId = scannedPayload.macDeviceId
+                        macIdentityPublicKey = scannedPayload.macIdentityPublicKey
+                        expiresAt = scannedPayload.expiresAt
+                        service.rememberPairing(scannedPayload)
+                        scope.launch {
+                            runCatching { service.connectLive() }
+                        }
                     }
                 )
             }

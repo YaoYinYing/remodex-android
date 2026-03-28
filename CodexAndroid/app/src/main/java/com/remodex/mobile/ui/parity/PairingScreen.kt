@@ -9,18 +9,28 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.service.ConnectionState
+import com.remodex.mobile.service.PairingPayload
 
 @Composable
 fun PairingScreen(
@@ -38,8 +48,15 @@ fun PairingScreen(
     onRequestNotificationPermission: () -> Unit,
     onRememberPairing: () -> Unit,
     onConnectDemo: () -> Unit,
-    onConnectLive: () -> Unit
+    onConnectLive: () -> Unit,
+    onScannedPairing: (PairingPayload) -> Unit
 ) {
+    var showManualEntry by rememberSaveable { mutableStateOf(false) }
+    var scannerErrorMessage by remember { mutableStateOf<String?>(null) }
+    var bridgeUpdatePrompt by remember { mutableStateOf<BridgeUpdatePrompt?>(null) }
+    var didCopyBridgeCommand by rememberSaveable { mutableStateOf(false) }
+    val clipboardManager = LocalClipboardManager.current
+
     val indicatorColor = animateColorAsState(
         targetValue = when (connectionState) {
             ConnectionState.Connected -> Color(0xFF2DB17D)
@@ -80,42 +97,84 @@ fun PairingScreen(
             }
             item {
                 SectionCard(
-                    title = "Secure Pairing",
-                    subtitle = "Store local relay metadata before connecting."
+                    title = "Scan Pairing QR",
+                    subtitle = "Use the secure QR from your Remodex CLI session."
                 ) {
-                    OutlinedTextField(
-                        value = relayUrl,
-                        onValueChange = onRelayUrlChange,
-                        label = { Text("Relay URL") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = sessionId,
-                        onValueChange = onSessionIdChange,
-                        label = { Text("Session ID") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = macDeviceId,
-                        onValueChange = onMacDeviceIdChange,
-                        label = { Text("Mac Device ID") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = macIdentityPublicKey,
-                        onValueChange = onMacIdentityPublicKeyChange,
-                        label = { Text("Mac Identity Key (base64)") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (bridgeUpdatePrompt == null) {
+                        PairingQrScannerSurface(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(340.dp),
+                            onScan = { scannedCode, resetScanLock ->
+                                when (val result = validatePairingQrCode(scannedCode)) {
+                                    is QrScannerPairingValidationResult.Success -> {
+                                        onScannedPairing(result.payload)
+                                        bridgeUpdatePrompt = null
+                                    }
+
+                                    is QrScannerPairingValidationResult.ScanError -> {
+                                        scannerErrorMessage = result.message
+                                        resetScanLock()
+                                    }
+
+                                    is QrScannerPairingValidationResult.BridgeUpdateRequired -> {
+                                        didCopyBridgeCommand = false
+                                        bridgeUpdatePrompt = result.prompt
+                                        resetScanLock()
+                                    }
+                                }
+                            }
+                        )
+                    } else {
+                        val prompt = bridgeUpdatePrompt ?: return@SectionCard
+                        Text(
+                            text = prompt.title,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = prompt.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "1. Update Remodex on your Mac",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        OutlinedTextField(
+                            value = prompt.command,
+                            onValueChange = {},
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = false,
+                            label = { Text("Command") }
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                clipboardManager.setText(AnnotatedString(prompt.command))
+                                didCopyBridgeCommand = true
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (didCopyBridgeCommand) "Copied" else "Copy Command")
+                        }
                         Button(
-                            onClick = onRememberPairing,
+                            onClick = {
+                                bridgeUpdatePrompt = null
+                                didCopyBridgeCommand = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("I Updated It")
+                        }
+                    }
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = { showManualEntry = !showManualEntry },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("Remember Pair")
+                            Text(if (showManualEntry) "Hide Manual Entry" else "Enter Manually")
                         }
                         OutlinedButton(
                             onClick = onConnectDemo,
@@ -124,11 +183,55 @@ fun PairingScreen(
                             Text("Connect Demo")
                         }
                     }
-                    Button(
-                        onClick = onConnectLive,
-                        modifier = Modifier.fillMaxWidth()
+                }
+            }
+            if (showManualEntry) {
+                item {
+                    SectionCard(
+                        title = "Manual Pairing Fallback",
+                        subtitle = "Use this only when scanning is unavailable."
                     ) {
-                        Text("Connect Live")
+                        OutlinedTextField(
+                            value = relayUrl,
+                            onValueChange = onRelayUrlChange,
+                            label = { Text("Relay URL") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = sessionId,
+                            onValueChange = onSessionIdChange,
+                            label = { Text("Session ID") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = macDeviceId,
+                            onValueChange = onMacDeviceIdChange,
+                            label = { Text("Mac Device ID") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = macIdentityPublicKey,
+                            onValueChange = onMacIdentityPublicKeyChange,
+                            label = { Text("Mac Identity Key (base64)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = onRememberPairing,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Remember Pair")
+                            }
+                            Button(
+                                onClick = onConnectLive,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Connect Live")
+                            }
+                        }
                     }
                 }
             }
@@ -152,6 +255,20 @@ fun PairingScreen(
                 }
             }
         }
+    }
+
+    val error = scannerErrorMessage
+    if (error != null) {
+        AlertDialog(
+            onDismissRequest = { scannerErrorMessage = null },
+            title = { Text("Scan Error") },
+            text = { Text(error) },
+            confirmButton = {
+                Button(onClick = { scannerErrorMessage = null }) {
+                    Text("OK")
+                }
+            }
+        )
     }
 }
 

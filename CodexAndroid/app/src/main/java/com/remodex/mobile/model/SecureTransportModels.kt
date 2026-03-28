@@ -1,6 +1,8 @@
 package com.remodex.mobile.model
 
 const val CODEX_SECURE_PROTOCOL_VERSION = 1
+const val CODEX_PAIRING_QR_VERSION = 2
+const val CODEX_SECURE_CLOCK_SKEW_TOLERANCE_MILLIS = 60_000L
 const val CODEX_SECURE_HANDSHAKE_TAG = "remodex-e2ee-v1"
 
 enum class SecureHandshakeMode(val wireValue: String) {
