@@ -73,7 +73,39 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
-          script: cd CodexAndroid && ./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest
+          script: |
+            adb wait-for-device
+            boot_wait=0
+            while [ "$boot_wait" -lt 180 ]; do
+              boot_state="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+              if [ "$boot_state" = "1" ]; then
+                break
+              fi
+              boot_wait=$((boot_wait + 1))
+              sleep 2
+            done
+            if [ "$boot_state" != "1" ]; then
+              echo "Emulator did not report sys.boot_completed=1 in time."
+              adb shell getprop || true
+              exit 1
+            fi
+
+            package_wait=0
+            while [ "$package_wait" -lt 120 ]; do
+              if adb shell cmd package path android >/dev/null 2>&1; then
+                break
+              fi
+              package_wait=$((package_wait + 1))
+              sleep 2
+            done
+            if ! adb shell cmd package path android >/dev/null 2>&1; then
+              echo "Package manager service is not ready."
+              adb shell getprop || true
+              exit 1
+            fi
+
+            cd CodexAndroid
+            ./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest
 
       - name: Upload instrumentation reports on failure
         if: failure()
