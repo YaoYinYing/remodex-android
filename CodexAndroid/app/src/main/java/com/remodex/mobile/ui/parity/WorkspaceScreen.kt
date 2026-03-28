@@ -262,6 +262,7 @@ fun WorkspaceScreen(
             MaterialTheme.colorScheme.background
         )
     )
+    val hasActiveThread = threads.any { it.id == selectedThreadId && !it.isArchived }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -489,145 +490,148 @@ fun WorkspaceScreen(
                         }
                     }
 
-                    item {
-                        SectionCard(
-                            title = "Permission Granting",
-                            subtitle = "Approve or deny pending runtime actions."
-                        ) {
-                            if (pendingPermissions.isEmpty()) {
+                    if (!hasActiveThread) {
+                        item {
+                            SectionCard(
+                                title = "No Active Chat",
+                                subtitle = "Select a chat from sidebar or start a new project-scoped chat."
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = {
+                                            val preferredPath = currentProjectPath
+                                                .takeUnless { it == "Project path not resolved." }
+                                            scope.launch {
+                                                runCatching { service.startThread(preferredProjectPath = preferredPath) }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("New Chat") }
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch {
+                                                runCatching { drawerState.open() }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("Open Sidebar") }
+                                }
                                 Text(
-                                    text = "No pending permissions.",
+                                    text = rateLimitInfo,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            } else {
-                                pendingPermissions.forEach { request ->
-                                    PermissionRow(
-                                        request = request,
-                                        onAllow = {
-                                            scope.launch { runCatching { service.grantPermission(request.id, allow = true) } }
-                                        },
-                                        onDeny = {
-                                            scope.launch { runCatching { service.grantPermission(request.id, allow = false) } }
-                                        }
-                                    )
-                                }
+                                Text(
+                                    text = ciStatus,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
-                    }
-
-                    item {
-                        SectionCard(
-                            title = "Code Changes",
-                            subtitle = "Branch selection, commit, and remote sync actions."
-                        ) {
-                            Text(
-                                text = gitStatusSummary,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    } else {
+                        item {
+                            SectionCard(
+                                title = "Permission Granting",
+                                subtitle = "Approve or deny pending runtime actions."
                             ) {
-                                gitBranches.forEach { branch ->
-                                    OutlinedButton(onClick = { onCheckoutBranchChange(branch) }) {
-                                        Text(branch)
+                                if (pendingPermissions.isEmpty()) {
+                                    Text(
+                                        text = "No pending permissions.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    pendingPermissions.forEach { request ->
+                                        PermissionRow(
+                                            request = request,
+                                            onAllow = {
+                                                scope.launch { runCatching { service.grantPermission(request.id, allow = true) } }
+                                            },
+                                            onDeny = {
+                                                scope.launch { runCatching { service.grantPermission(request.id, allow = false) } }
+                                            }
+                                        )
                                     }
                                 }
                             }
-                            OutlinedTextField(
-                                value = checkoutBranch,
-                                onValueChange = onCheckoutBranchChange,
-                                label = { Text("Branch") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-                            OutlinedTextField(
-                                value = commitMessage,
-                                onValueChange = onCommitMessageChange,
-                                label = { Text("Commit message") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = { scope.launch { runCatching { service.checkoutGitBranch(checkoutBranch) } } },
-                                    enabled = checkoutBranch.isNotBlank(),
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("Checkout") }
-                                Button(
-                                    onClick = {
-                                        scope.launch {
-                                            runCatching { service.gitCommit(commitMessage) }
-                                                .onSuccess { onCommitMessageChange("") }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("Commit") }
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(
-                                    onClick = { scope.launch { runCatching { service.gitPull() } } },
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("Pull") }
-                                OutlinedButton(
-                                    onClick = { scope.launch { runCatching { service.gitPush() } } },
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("Push") }
-                            }
                         }
-                    }
 
-                    item {
-                        SectionCard(
-                            title = "Chat + Threads",
-                            subtitle = "Current project chat context with iOS-matched controls."
-                        ) {
-                            val liveThreads = threads.filterNot { it.isArchived }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = {
-                                        val preferredPath = currentProjectPath
-                                            .takeUnless { it == "Project path not resolved." }
-                                        scope.launch {
-                                            runCatching { service.startThread(preferredProjectPath = preferredPath) }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("New Thread") }
-                                OutlinedButton(
-                                    onClick = {
-                                        scope.launch {
-                                            runCatching { service.refreshThreads(includeTimeline = false) }
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) { Text("Refresh Threads") }
-                            }
-                            if (liveThreads.isEmpty()) {
+                        item {
+                            SectionCard(
+                                title = "Code Changes",
+                                subtitle = "Branch selection, commit, and remote sync actions."
+                            ) {
                                 Text(
-                                    text = "No threads yet.",
+                                    text = gitStatusSummary,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            } else {
-                                liveThreads.forEach { thread ->
-                                    ThreadRow(
-                                        thread = thread,
-                                        isSelected = selectedThreadId == thread.id,
-                                        onClick = { scope.launch { runCatching { service.openThread(thread.id) } } }
-                                    )
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    gitBranches.forEach { branch ->
+                                        OutlinedButton(onClick = { onCheckoutBranchChange(branch) }) {
+                                            Text(branch)
+                                        }
+                                    }
+                                }
+                                OutlinedTextField(
+                                    value = checkoutBranch,
+                                    onValueChange = onCheckoutBranchChange,
+                                    label = { Text("Branch") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                                OutlinedTextField(
+                                    value = commitMessage,
+                                    onValueChange = onCommitMessageChange,
+                                    label = { Text("Commit message") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Button(
+                                        onClick = { scope.launch { runCatching { service.checkoutGitBranch(checkoutBranch) } } },
+                                        enabled = checkoutBranch.isNotBlank(),
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("Checkout") }
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                runCatching { service.gitCommit(commitMessage) }
+                                                    .onSuccess { onCommitMessageChange("") }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("Commit") }
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        onClick = { scope.launch { runCatching { service.gitPull() } } },
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("Pull") }
+                                    OutlinedButton(
+                                        onClick = { scope.launch { runCatching { service.gitPush() } } },
+                                        modifier = Modifier.weight(1f)
+                                    ) { Text("Push") }
                                 }
                             }
-                            OutlinedTextField(
-                                value = composerInput,
-                                onValueChange = onComposerInputChange,
-                                label = { Text("Ask anything... @files, \$skills, /commands") },
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                        }
+
+                        item {
+                            SectionCard(
+                                title = "Conversation",
+                                subtitle = "Composer and send controls for the selected chat."
+                            ) {
+                                OutlinedTextField(
+                                    value = composerInput,
+                                    onValueChange = onComposerInputChange,
+                                    label = { Text("Ask anything... @files, \$skills, /commands") },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
                             OutlinedTextField(
                                 value = voiceDraftText,
                                 onValueChange = { voiceDraftText = it },
@@ -944,28 +948,29 @@ fun WorkspaceScreen(
                                 ) { Text("Send") }
                                 OutlinedButton(
                                     onClick = { scope.launch { runCatching { service.interruptActiveTurn() } } },
-                                    enabled = selectedThreadId != null,
+                                    enabled = selectedThreadId != null && service.isThreadRunning(selectedThreadId),
                                     modifier = Modifier.weight(1f)
                                 ) { Text("Stop") }
                             }
                         }
-                    }
+                        }
 
-                    item {
-                        SectionCard(
-                            title = "Timeline",
-                            subtitle = "Latest conversation stream and reasoning entries."
-                        ) {
-                            val visibleTimeline = timeline.takeLast(24)
-                            if (visibleTimeline.isEmpty()) {
-                                Text(
-                                    text = "No timeline events yet.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            } else {
-                                visibleTimeline.forEach { entry ->
-                                    TimelineRow(item = entry)
+                        item {
+                            SectionCard(
+                                title = "Timeline",
+                                subtitle = "Latest conversation stream and reasoning entries."
+                            ) {
+                                val visibleTimeline = timeline.takeLast(24)
+                                if (visibleTimeline.isEmpty()) {
+                                    Text(
+                                        text = "No timeline events yet.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    visibleTimeline.forEach { entry ->
+                                        TimelineRow(item = entry)
+                                    }
                                 }
                             }
                         }
