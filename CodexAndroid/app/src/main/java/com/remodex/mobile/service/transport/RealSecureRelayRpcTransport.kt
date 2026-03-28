@@ -65,6 +65,9 @@ class RealSecureRelayRpcTransport(
 ) : RpcTransport {
     private val json = Json {
         ignoreUnknownKeys = true
+        // Secure control/envelope messages rely on explicit wire `kind` fields.
+        // Keep defaults encoded so bridge secure parser can route messages correctly.
+        encodeDefaults = true
     }
     private val secureRandom = SecureRandom()
     private val requestIdCounter = AtomicLong(1)
