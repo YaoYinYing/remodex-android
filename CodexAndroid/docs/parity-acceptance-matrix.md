@@ -5,7 +5,7 @@ Every row must be verified before the iteration is considered complete.
 
 ## Gate Status
 
-- `TODO-01` to `TODO-20`: `DONE` (re-validated on 2026-03-28 after slash/review/subagents parity pass)
+- `TODO-01` to `TODO-22`: `DONE` (re-validated on 2026-03-28 after fork submenu + queued-drafts parity pass)
 
 | TODO | Scope | Verification | Evidence |
 | --- | --- | --- | --- |
@@ -20,7 +20,7 @@ Every row must be verified before the iteration is considered complete.
 | TODO-09 | @files/$skills//commands | Instrumentation | Mention chips and autocomplete panels appear and resolve correctly |
 | TODO-10 | Git actions parity | Unit + live ADB | Status, branches, checkout, commit, pull, and push work in a repo-bound thread |
 | TODO-11 | Thread lifecycle parity | Unit + live ADB | Start, resume, fork, interrupt, archive, unarchive, and delete flows persist correctly |
-| TODO-12 | Task steering + plan/review | Unit + instrumentation | `/steer` and `/review` route with iOS-style composer semantics (review target suggestion tray, armed review chip, send-time `review/start` target payload) |
+| TODO-12 | Task steering + plan/review/fork slash workflow | Unit + instrumentation | `/steer`, `/review`, and `/fork` route with iOS-style composer semantics (review targets, fork destinations, armed composer state) |
 | TODO-13 | Voice + media parity | Instrumentation + live ADB | Camera/gallery uploads and voice transcription complete end-to-end |
 | TODO-14 | Notifications parity | Unit + live ADB | Status, permission, rate-limit, git, and CI/CD alerts are emitted |
 | TODO-15 | Settings parity | Instrumentation | Font, tone, runtime defaults, and connection controls match iOS via app-level settings route |
@@ -29,6 +29,8 @@ Every row must be verified before the iteration is considered complete.
 | TODO-18 | Event-stream ingestion | Unit + live ADB | Incoming notification/delta events update the active turn state |
 | TODO-19 | Live ADB acceptance | Live ADB | APK install, pair, and living workflow matrix succeed on a physical device |
 | TODO-20 | Final gate closure | Release gate | All TODOs are `DONE`, evidence is attached, and final commit/push is complete |
+| TODO-21 | Fork slash submenu parity | Instrumentation + live ADB | `/fork` shows local/new-worktree destinations and executes the selected flow without regressions |
+| TODO-22 | Queued drafts panel parity | Unit + instrumentation | Queued drafts support per-draft restore/steer/remove actions with stable draft identity and steer locking |
 
 ## Evidence Pack
 

@@ -1461,18 +1461,53 @@ class CodexService(
         return true
     }
 
-    suspend fun threadFork(threadId: String? = null): String? {
+    suspend fun threadFork(
+        threadId: String? = null,
+        targetProjectPath: String? = null
+    ): String? {
         ensureConnected()
         val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: _selectedThreadId.value
             ?: return null
-        val responsePair = requestFirstAvailable(
-            methods = listOf("thread/fork"),
-            params = JsonObject(
-                mapOf(
-                    "threadId" to JsonPrimitive(normalizedThreadId)
-                )
+        val normalizedTargetProjectPath = normalizeProjectPath(targetProjectPath)
+        val primaryParams = buildThreadForkParams(
+            threadId = normalizedThreadId,
+            targetProjectPath = normalizedTargetProjectPath
+        )
+        val attemptParams = buildList {
+            add(primaryParams)
+            val legacyParams = buildThreadForkParams(
+                threadId = normalizedThreadId,
+                targetProjectPath = null
             )
-        ) ?: run {
+            if (legacyParams.toString() != primaryParams.toString()) {
+                add(legacyParams)
+            }
+        }
+        var usedFallbackParams = false
+        var responsePair: Pair<String, RpcMessage>? = null
+        for ((index, params) in attemptParams.withIndex()) {
+            val candidate = try {
+                requestFirstAvailable(
+                    methods = listOf("thread/fork"),
+                    params = params
+                )
+            } catch (error: IllegalStateException) {
+                val hasFallback = index < attemptParams.lastIndex
+                if (hasFallback && shouldFallbackThreadForkParams(error)) {
+                    usedFallbackParams = true
+                    continue
+                }
+                throw error
+            }
+            if (candidate != null) {
+                if (index > 0) {
+                    usedFallbackParams = true
+                }
+                responsePair = candidate
+                break
+            }
+        }
+        if (responsePair == null) {
             setStatus("Thread fork unavailable from relay.")
             return null
         }
@@ -1486,9 +1521,58 @@ class CodexService(
         }
         val forkedThreadId = parsedThread?.id ?: resultObject.string("threadId", "thread_id")
         if (!forkedThreadId.isNullOrBlank()) {
-            setStatus("Forked thread $forkedThreadId via $activeTransportLabel.", notify = true)
+            val targetHint = if (normalizedTargetProjectPath != null) " into $normalizedTargetProjectPath" else ""
+            val compatibilityHint = if (usedFallbackParams && normalizedTargetProjectPath != null) {
+                " (runtime ignored target override)"
+            } else {
+                ""
+            }
+            setStatus(
+                "Forked thread $forkedThreadId$targetHint via $activeTransportLabel.$compatibilityHint",
+                notify = true
+            )
         }
         return forkedThreadId
+    }
+
+    suspend fun gitCreateWorktree(
+        name: String,
+        baseBranch: String,
+        changeTransfer: String = "copy"
+    ): String {
+        ensureConnected()
+        val gitScope = requireSelectedThreadGitScope()
+        val normalizedName = name.trim()
+        val normalizedBaseBranch = baseBranch.trim()
+        if (normalizedName.isEmpty()) {
+            throw IllegalArgumentException("Worktree branch name is required.")
+        }
+        if (normalizedBaseBranch.isEmpty()) {
+            throw IllegalArgumentException("Base branch is required.")
+        }
+        val responsePair = requestFirstAvailable(
+            methods = listOf("git/createWorktree"),
+            params = JsonObject(
+                mapOf(
+                    "name" to JsonPrimitive(normalizedName),
+                    "baseBranch" to JsonPrimitive(normalizedBaseBranch),
+                    "changeTransfer" to JsonPrimitive(changeTransfer),
+                    "cwd" to JsonPrimitive(gitScope.cwd),
+                    "threadId" to JsonPrimitive(gitScope.threadId)
+                )
+            )
+        ) ?: throw IllegalStateException("git/createWorktree unavailable from relay.")
+        val resultObject = responsePair.second.result as? JsonObject ?: JsonObject(emptyMap())
+        val worktreePath = resultObject.string("worktreePath", "worktree_path")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("git/createWorktree result missing worktree path.")
+        setStatus(
+            "Prepared worktree $worktreePath via $activeTransportLabel.",
+            notify = true,
+            eventKind = ServiceEventKind.GIT_ACTION
+        )
+        return worktreePath
     }
 
     suspend fun reviewStart(
@@ -1595,6 +1679,30 @@ class CodexService(
             || message.contains("invalid type")
             || message.contains("missing field")
             || message.contains("unknown field")
+    }
+
+    private fun buildThreadForkParams(
+        threadId: String,
+        targetProjectPath: String?
+    ): JsonObject {
+        val payload = mutableMapOf<String, kotlinx.serialization.json.JsonElement>(
+            "threadId" to JsonPrimitive(threadId)
+        )
+        if (!targetProjectPath.isNullOrBlank()) {
+            payload["cwd"] = JsonPrimitive(targetProjectPath)
+        }
+        return JsonObject(payload)
+    }
+
+    private fun shouldFallbackThreadForkParams(error: IllegalStateException): Boolean {
+        val message = error.message?.lowercase().orEmpty()
+        return message.contains("(-32600)")
+            || message.contains("(-32602)")
+            || message.contains("invalid params")
+            || message.contains("invalid type")
+            || message.contains("missing field")
+            || message.contains("unknown field")
+            || message.contains("thread/fork")
     }
 
     suspend fun interruptActiveTurn() {

@@ -181,6 +181,7 @@ class FixtureRpcTransport : RpcTransport {
             "git/status" -> fixtureGitStatus()
             "git/branches" -> fixtureGitBranches()
             "git/checkout" -> fixtureGitCheckout(params)
+            "git/createWorktree" -> fixtureGitCreateWorktree(params)
             "git/pull" -> fixtureGitPull()
             "git/push" -> fixtureGitPush()
             "git/commit" -> fixtureGitCommit(params)
@@ -329,6 +330,37 @@ class FixtureRpcTransport : RpcTransport {
                 mapOf(
                     "ok" to JsonPrimitive(true),
                     "branch" to JsonPrimitive(branch)
+                )
+            )
+        )
+    }
+
+    private fun fixtureGitCreateWorktree(params: JsonObject): RpcMessage {
+        consumeQuota(2)
+        val branch = (params["name"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        val baseBranch = (params["baseBranch"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        if (branch.isEmpty() || baseBranch.isEmpty()) {
+            return RpcMessage(
+                jsonrpc = "2.0",
+                id = JsonPrimitive("fixture-git-create-worktree"),
+                error = RpcError(
+                    code = -32602,
+                    message = "name and baseBranch are required."
+                )
+            )
+        }
+        if (!branchNames.contains(branch)) {
+            branchNames += branch
+        }
+        val worktreePath = "/Users/yyy/.codex/worktrees/$branch/remodex"
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-git-create-worktree-$branch"),
+            result = JsonObject(
+                mapOf(
+                    "branch" to JsonPrimitive(branch),
+                    "worktreePath" to JsonPrimitive(worktreePath),
+                    "alreadyExisted" to JsonPrimitive(false)
                 )
             )
         )

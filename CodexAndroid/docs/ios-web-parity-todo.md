@@ -13,7 +13,7 @@ Completion rule for this iteration: every item below must be `DONE`.
 | IW-03 | Keep paywall as silent dev gate (no public pricing) while mirroring iOS feature hierarchy cards. | `SubscriptionGateView.swift`, user constraint | DONE |
 | IW-04 | Align paywall feature copy to website claims (live control, git, secure pairing, command/mention workflow). | website interface/features section | DONE |
 | IW-05 | Bring empty-home visual shell closer to iOS by adding original app logo + connection status capsule treatment. | `HomeEmptyStateView.swift` | DONE |
-| IW-06 | Complete slash-command parity for `/review` and `/subagents` (inline review-target selection + armed review chip; subagents armed chip + iOS canned prompt payload). | website `@files, $skills, /commands` + iOS `TurnComposerCommandState.swift` | DONE |
+| IW-06 | Complete slash-command parity for `/review`, `/subagents`, and `/fork` (target/destination submenus + armed composer chips + iOS-compatible payload semantics). | website `@files, $skills, /commands` + iOS `TurnComposerCommandState.swift`/`SlashCommandAutocompletePanel.swift` | DONE |
 | IW-07 | Add active-turn steering command path (`/steer`) in composer flow. | website task steering claim | DONE |
 | IW-08 | Update Android instrumentation expectations to match the new onboarding/pairing UI wording and current `WorkspaceScreen` API. | Android parity test suite | DONE |
 | IW-09 | Keep local relay living test green after parity updates. | local-first runbook + ADB validation | DONE |
@@ -28,6 +28,8 @@ Completion rule for this iteration: every item below must be `DONE`.
 | IW-18 | Promote settings from local workspace overlay toggle to app-level route gating in root flow. | `ContentView.swift` settings destination semantics | DONE |
 | IW-19 | Ensure live local pairing script auto-installs app when instrumentation runs removed the package, preventing false negative “activity not found” failures. | local-first live test reliability requirement | DONE |
 | IW-20 | Re-verify parity evidence pack after the above root-flow and settings changes on physical device. | iteration gate policy | DONE |
+| IW-21 | Implement iOS-style `/fork` destination submenu (local vs new worktree) and route each destination to the matching Android runtime path. | `SlashCommandAutocompletePanel.swift`, `TurnView.swift` fork flow | DONE |
+| IW-22 | Implement iOS-style queued drafts panel with per-draft restore/steer/remove actions and steer-in-progress lock behavior. | `QueuedDraftsPanel.swift`, `TurnViewModel.swift` queued draft handling | DONE |
 
 ## Evidence
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`

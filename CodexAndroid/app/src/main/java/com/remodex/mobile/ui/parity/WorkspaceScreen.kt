@@ -143,6 +143,8 @@ fun WorkspaceScreen(
     var subagentsArmed by rememberSaveable { mutableStateOf(false) }
     var armedReviewTarget by rememberSaveable { mutableStateOf<ReviewTarget?>(null) }
     var showReviewTargetSuggestions by rememberSaveable { mutableStateOf(false) }
+    var showForkDestinationSuggestions by rememberSaveable { mutableStateOf(false) }
+    var steeringQueuedDraftId by rememberSaveable { mutableStateOf<String?>(null) }
     val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
     var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
@@ -271,6 +273,9 @@ fun WorkspaceScreen(
             || subagentsArmed
         if (armedReviewTarget != null && hasConflictingDraftContent) {
             armedReviewTarget = null
+        }
+        if (hasConflictingDraftContent) {
+            showForkDestinationSuggestions = false
         }
     }
 
@@ -500,6 +505,7 @@ fun WorkspaceScreen(
                             subagentsArmed = subagentsArmed,
                             armedReviewTarget = armedReviewTarget,
                             showReviewTargetSuggestions = showReviewTargetSuggestions,
+                            showForkDestinationSuggestions = showForkDestinationSuggestions,
                             mentionedFiles = mentionedFiles,
                             mentionedSkills = mentionedSkills,
                             activeComposerToken = activeComposerToken,
@@ -508,6 +514,7 @@ fun WorkspaceScreen(
                             commandSuggestions = commandSuggestions,
                             queuedDrafts = queuedDrafts,
                             queuePaused = queuePaused,
+                            steeringQueuedDraftId = steeringQueuedDraftId,
                             isRunning = service.isThreadRunning(selectedThreadId),
                             onQueuePausedChange = { queuePaused = it },
                             onAttachGallery = { galleryPicker.launch("image/*") },
@@ -564,6 +571,7 @@ fun WorkspaceScreen(
                                 when (command.token) {
                                     "/status" -> {
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         scope.launch {
                                             runCatching { service.forceRefreshWorkspace() }
                                             runCatching { service.refreshThreads(includeTimeline = false) }
@@ -574,6 +582,7 @@ fun WorkspaceScreen(
 
                                     "/new" -> {
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         scope.launch {
                                             runCatching { service.startThread(preferredProjectPath = normalizedProjectPath) }
                                         }
@@ -581,11 +590,13 @@ fun WorkspaceScreen(
 
                                     "/refresh" -> {
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         scope.launch { runCatching { service.forceRefreshWorkspace() } }
                                     }
 
                                     "/resume" -> {
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         scope.launch {
                                             runCatching { service.threadResume(selectedThreadId) }
                                         }
@@ -593,18 +604,25 @@ fun WorkspaceScreen(
 
                                     "/fork" -> {
                                         showReviewTargetSuggestions = false
-                                        scope.launch {
-                                            runCatching { service.threadFork(selectedThreadId) }
+                                        if (selectedThreadId != null && service.isThreadRunning(selectedThreadId)) {
+                                            showForkDestinationSuggestions = false
+                                            attachmentHint = "Wait for the current response to finish before forking."
+                                        } else {
+                                            attachmentHint = null
+                                            onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
+                                            showForkDestinationSuggestions = true
                                         }
                                     }
 
                                     "/review" -> {
                                         onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
                                         showReviewTargetSuggestions = true
+                                        showForkDestinationSuggestions = false
                                     }
 
                                     "/subagents" -> {
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         armedReviewTarget = null
                                         onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
                                         subagentsArmed = true
@@ -612,6 +630,7 @@ fun WorkspaceScreen(
 
                                     "/steer" -> {
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         val steerInput = composerInput
                                             .removePrefix("/steer")
                                             .trim()
@@ -627,6 +646,7 @@ fun WorkspaceScreen(
 
                                     else -> {
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         onComposerInputChange(
                                             "Help: use @files, \$skills, /status, /new, /refresh, /resume, /fork, /review, /subagents, /steer."
                                         )
@@ -635,19 +655,51 @@ fun WorkspaceScreen(
                                 fileSuggestions = emptyList()
                                 skillSuggestions = emptyList()
                             },
-                            onRestoreLatest = {
-                                val latest = queuedDrafts.removeLastOrNull() ?: return@ComposerDock
-                                onComposerInputChange(latest.text)
-                                subagentsArmed = latest.subagentsArmed
+                            onRestoreQueuedDraft = { draftId ->
+                                val index = queuedDrafts.indexOfFirst { it.id == draftId }
+                                if (index < 0) {
+                                    return@ComposerDock
+                                }
+                                val restored = queuedDrafts.removeAt(index)
+                                onComposerInputChange(restored.text)
+                                subagentsArmed = restored.subagentsArmed
                                 armedReviewTarget = null
+                                showReviewTargetSuggestions = false
+                                showForkDestinationSuggestions = false
                                 mentionedFiles.clear()
-                                mentionedFiles.addAll(latest.fileMentions)
+                                mentionedFiles.addAll(restored.fileMentions)
                                 mentionedSkills.clear()
-                                mentionedSkills.addAll(latest.skillMentions)
+                                mentionedSkills.addAll(restored.skillMentions)
                                 mediaAttachments.clear()
-                                mediaAttachments.addAll(latest.attachments)
+                                mediaAttachments.addAll(restored.attachments)
                             },
-                            onClearQueue = { queuedDrafts.clear() },
+                            onSteerQueuedDraft = { draftId ->
+                                val index = queuedDrafts.indexOfFirst { it.id == draftId }
+                                if (index < 0 || selectedThreadId.isNullOrBlank()) {
+                                    return@ComposerDock
+                                }
+                                val draft = queuedDrafts[index]
+                                steeringQueuedDraftId = draftId
+                                scope.launch {
+                                    runCatching {
+                                        service.turnSteer(buildComposerPayloadText(draft.text, draft.subagentsArmed))
+                                    }.onSuccess {
+                                        queuedDrafts.removeAll { it.id == draftId }
+                                    }.also {
+                                        steeringQueuedDraftId = null
+                                    }
+                                }
+                            },
+                            onRemoveQueuedDraft = { draftId ->
+                                queuedDrafts.removeAll { it.id == draftId }
+                                if (steeringQueuedDraftId == draftId) {
+                                    steeringQueuedDraftId = null
+                                }
+                            },
+                            onClearQueue = {
+                                queuedDrafts.clear()
+                                steeringQueuedDraftId = null
+                            },
                             onSelectReviewTargetSuggestion = { target ->
                                 val hasConflictingDraftContent = composerInput.trim().isNotEmpty()
                                     || mentionedFiles.isNotEmpty()
@@ -657,14 +709,54 @@ fun WorkspaceScreen(
                                 if (hasConflictingDraftContent) {
                                     attachmentHint = "Review mode requires an empty draft with no mentions, attachments, or /subagents."
                                     showReviewTargetSuggestions = false
+                                    showForkDestinationSuggestions = false
                                 } else {
                                     attachmentHint = null
                                     armedReviewTarget = target
                                     showReviewTargetSuggestions = false
+                                    showForkDestinationSuggestions = false
                                     onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
                                 }
                             },
-                            onDismissReviewTargetSuggestions = { showReviewTargetSuggestions = false },
+                            onDismissReviewTargetSuggestions = {
+                                showReviewTargetSuggestions = false
+                                showForkDestinationSuggestions = false
+                            },
+                            onSelectForkDestinationLocal = {
+                                showForkDestinationSuggestions = false
+                                scope.launch {
+                                    runCatching { service.threadFork(selectedThreadId) }
+                                }
+                            },
+                            onSelectForkDestinationNewWorktree = {
+                                showForkDestinationSuggestions = false
+                                val normalizedBaseBranch = checkoutBranch.trim()
+                                if (normalizedBaseBranch.isEmpty()) {
+                                    attachmentHint = "Pick a base branch before creating a worktree fork."
+                                    return@ComposerDock
+                                }
+                                val generatedBranch = "android-fork-${System.currentTimeMillis().toString(16)}"
+                                scope.launch {
+                                    runCatching {
+                                        val worktreePath = service.gitCreateWorktree(
+                                            name = generatedBranch,
+                                            baseBranch = normalizedBaseBranch,
+                                            changeTransfer = "copy"
+                                        )
+                                        service.threadFork(
+                                            threadId = selectedThreadId,
+                                            targetProjectPath = worktreePath
+                                        )
+                                    }.onSuccess {
+                                        attachmentHint = null
+                                    }.onFailure {
+                                        attachmentHint = it.message ?: "Failed to create worktree fork."
+                                    }
+                                }
+                            },
+                            onDismissForkDestinationSuggestions = {
+                                showForkDestinationSuggestions = false
+                            },
                             onSend = {
                                 val selectedReviewTarget = armedReviewTarget
                                 if (selectedReviewTarget != null) {
@@ -678,6 +770,7 @@ fun WorkspaceScreen(
                                         }.onSuccess {
                                             armedReviewTarget = null
                                             showReviewTargetSuggestions = false
+                                            showForkDestinationSuggestions = false
                                             onComposerInputChange("")
                                             subagentsArmed = false
                                             attachmentHint = null
@@ -693,6 +786,7 @@ fun WorkspaceScreen(
                                 if (selectedThreadId != null && service.isThreadRunning(selectedThreadId)) {
                                     queuedDrafts.add(
                                         QueuedComposerDraft(
+                                            id = "draft-${System.currentTimeMillis()}-${queuedDrafts.size}",
                                             text = trimmed,
                                             subagentsArmed = subagentsArmed,
                                             fileMentions = mentionedFiles.toList(),
@@ -707,6 +801,7 @@ fun WorkspaceScreen(
                                     mentionedSkills.clear()
                                     subagentsArmed = false
                                     showReviewTargetSuggestions = false
+                                    showForkDestinationSuggestions = false
                                     attachmentHint = null
                                     return@ComposerDock
                                 }
@@ -725,6 +820,7 @@ fun WorkspaceScreen(
                                         mediaAttachments.clear()
                                         subagentsArmed = false
                                         showReviewTargetSuggestions = false
+                                        showForkDestinationSuggestions = false
                                         attachmentHint = null
                                         voiceDraftText = ""
                                     }
@@ -732,6 +828,7 @@ fun WorkspaceScreen(
                             },
                             onStop = {
                                 showReviewTargetSuggestions = false
+                                showForkDestinationSuggestions = false
                                 scope.launch { runCatching { service.interruptActiveTurn() } }
                             }
                         )
@@ -986,6 +1083,7 @@ private fun ComposerDock(
     subagentsArmed: Boolean,
     armedReviewTarget: ReviewTarget?,
     showReviewTargetSuggestions: Boolean,
+    showForkDestinationSuggestions: Boolean,
     mentionedFiles: List<String>,
     mentionedSkills: List<SkillSuggestion>,
     activeComposerToken: ComposerAutocompleteToken?,
@@ -994,6 +1092,7 @@ private fun ComposerDock(
     commandSuggestions: List<ComposerCommand>,
     queuedDrafts: List<QueuedComposerDraft>,
     queuePaused: Boolean,
+    steeringQueuedDraftId: String?,
     isRunning: Boolean,
     onQueuePausedChange: (Boolean) -> Unit,
     onAttachGallery: () -> Unit,
@@ -1008,10 +1107,15 @@ private fun ComposerDock(
     onSelectFileSuggestion: (ComposerAutocompleteToken.File, FileAutocompleteMatch) -> Unit,
     onSelectSkillSuggestion: (ComposerAutocompleteToken.Skill, SkillSuggestion) -> Unit,
     onSelectCommandSuggestion: (ComposerCommand) -> Unit,
-    onRestoreLatest: () -> Unit,
+    onRestoreQueuedDraft: (String) -> Unit,
+    onSteerQueuedDraft: (String) -> Unit,
+    onRemoveQueuedDraft: (String) -> Unit,
     onClearQueue: () -> Unit,
     onSelectReviewTargetSuggestion: (ReviewTarget) -> Unit,
     onDismissReviewTargetSuggestions: () -> Unit,
+    onSelectForkDestinationLocal: () -> Unit,
+    onSelectForkDestinationNewWorktree: () -> Unit,
+    onDismissForkDestinationSuggestions: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -1028,24 +1132,42 @@ private fun ComposerDock(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             if (queuedDrafts.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = "Queued ${queuedDrafts.size}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f)
-                    )
-                    SmallChip(
-                        text = if (queuePaused) "Resume" else "Pause",
-                        selected = false,
-                        onClick = { onQueuePausedChange(!queuePaused) }
-                    )
-                    SmallChip(text = "Restore", selected = false, onClick = onRestoreLatest)
-                    SmallChip(text = "Clear", selected = false, onClick = onClearQueue)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Queued ${queuedDrafts.size}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        SmallChip(
+                            text = if (queuePaused) "Resume" else "Pause",
+                            selected = false,
+                            onClick = { onQueuePausedChange(!queuePaused) }
+                        )
+                        SmallChip(text = "Clear", selected = false, onClick = onClearQueue)
+                    }
+                    queuedDrafts.forEach { draft ->
+                        QueuedDraftRow(
+                            draft = draft,
+                            canSteer = isRunning && selectedThreadId != null,
+                            canRestore = steeringQueuedDraftId == null,
+                            steeringQueuedDraftId = steeringQueuedDraftId,
+                            onRestore = { onRestoreQueuedDraft(draft.id) },
+                            onSteer = { onSteerQueuedDraft(draft.id) },
+                            onRemove = { onRemoveQueuedDraft(draft.id) }
+                        )
+                    }
                 }
             }
 
@@ -1106,7 +1228,18 @@ private fun ComposerDock(
                 )
             }
 
-            if (showReviewTargetSuggestions) {
+            if (showForkDestinationSuggestions) {
+                SuggestionTray(
+                    labels = listOf("Fork into local", "Fork into new worktree", "Cancel"),
+                    onSelected = { index ->
+                        when (index) {
+                            0 -> onSelectForkDestinationLocal()
+                            1 -> onSelectForkDestinationNewWorktree()
+                            else -> onDismissForkDestinationSuggestions()
+                        }
+                    }
+                )
+            } else if (showReviewTargetSuggestions) {
                 SuggestionTray(
                     labels = listOf("Uncommitted changes", "Base branch", "Cancel"),
                     onSelected = { index ->
@@ -1241,7 +1374,51 @@ private fun SuggestionTray(
     }
 }
 
+@Composable
+private fun QueuedDraftRow(
+    draft: QueuedComposerDraft,
+    canSteer: Boolean,
+    canRestore: Boolean,
+    steeringQueuedDraftId: String?,
+    onRestore: () -> Unit,
+    onSteer: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = draft.text,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        SmallChip(
+            text = "Restore",
+            selected = false,
+            onClick = if (canRestore) onRestore else ({})
+        )
+        if (canSteer) {
+            SmallChip(
+                text = if (steeringQueuedDraftId == draft.id) "Steering..." else "Steer",
+                selected = false,
+                onClick = if (steeringQueuedDraftId == null) onSteer else ({})
+            )
+        }
+        SmallChip(
+            text = "Remove",
+            selected = false,
+            onClick = if (steeringQueuedDraftId == draft.id) ({}) else onRemove
+        )
+    }
+}
+
 private data class QueuedComposerDraft(
+    val id: String,
     val text: String,
     val subagentsArmed: Boolean = false,
     val fileMentions: List<String>,
