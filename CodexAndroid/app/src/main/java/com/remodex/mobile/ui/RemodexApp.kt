@@ -117,7 +117,6 @@ fun RemodexApp(
     }
 
     var checkoutBranch by rememberSaveable { mutableStateOf("") }
-    var commitMessage by rememberSaveable { mutableStateOf("") }
     var composerInput by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(hasSeenOnboarding, hasProAccess, fontStyleRaw, toneModeRaw, loggerLevelRaw, loggerMaxLines) {
@@ -257,23 +256,11 @@ fun RemodexApp(
                         gitBranches = gitBranches,
                         checkoutBranch = checkoutBranch,
                         onCheckoutBranchChange = { checkoutBranch = it },
-                        commitMessage = commitMessage,
-                        onCommitMessageChange = { commitMessage = it },
                         threads = threads,
                         selectedThreadId = selectedThreadId,
                         timeline = timeline,
                         composerInput = composerInput,
                         onComposerInputChange = { composerInput = it },
-                        notificationsEnabled = notificationsEnabled,
-                        onRequestNotificationPermission = onRequestNotificationPermission,
-                        fontStyle = fontStyle,
-                        toneMode = toneMode,
-                        onFontStyleChanged = { style -> fontStyleRaw = style.storageValue },
-                        onToneModeChanged = { mode -> toneModeRaw = mode.name },
-                        loggerLevel = loggerLevel,
-                        loggerMaxLines = loggerMaxLines,
-                        onLoggerLevelChanged = { level -> loggerLevelRaw = level.name },
-                        onLoggerMaxLinesChanged = { maxLines -> loggerMaxLines = maxLines.coerceIn(200, 20_000) },
                         onOpenSettings = { showSettingsRoute = true },
                         onOpenPairing = { forcePairingView = true },
                         onHeaderTap = onHeaderTap

@@ -1,11 +1,13 @@
 package com.remodex.mobile.ui.parity
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
@@ -15,17 +17,19 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.remodex.mobile.R
 import com.remodex.mobile.model.ThreadSummary
-import com.remodex.mobile.service.logging.LoggerLevel
-import com.remodex.mobile.ui.theme.AppFontStyle
-import com.remodex.mobile.ui.theme.AppToneMode
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 
 @Composable
 fun SidebarDrawerContent(
@@ -36,19 +40,9 @@ fun SidebarDrawerContent(
     onStartThread: (String?) -> Unit,
     rateLimitInfo: String,
     ciStatus: String,
-    notificationsEnabled: Boolean,
-    fontStyle: AppFontStyle,
-    toneMode: AppToneMode,
-    onFontStyleChanged: (AppFontStyle) -> Unit,
-    onToneModeChanged: (AppToneMode) -> Unit,
-    onRequestNotificationPermission: () -> Unit,
     autoRefreshEnabled: Boolean,
     onAutoRefreshChanged: (Boolean) -> Unit,
     onRefreshWorkspace: () -> Unit,
-    loggerLevel: LoggerLevel,
-    loggerMaxLines: Int,
-    onLoggerLevelChanged: (LoggerLevel) -> Unit,
-    onLoggerMaxLinesChanged: (Int) -> Unit,
     onOpenSettings: () -> Unit,
     onGitPull: () -> Unit,
     onGitPush: () -> Unit,
@@ -59,13 +53,16 @@ fun SidebarDrawerContent(
     onArchiveProjectGroup: (threadIds: List<String>) -> Unit,
     onDisconnect: () -> Unit
 ) {
-    var loggerLinesInput by remember { mutableStateOf(loggerMaxLines.toString()) }
     var threadSearchQuery by remember { mutableStateOf("") }
-    var renameThreadId by rememberSaveable { mutableStateOf<String?>(null) }
     var renameInput by rememberSaveable { mutableStateOf("") }
+    var isRenameMode by rememberSaveable { mutableStateOf(false) }
     var showProjectChooser by rememberSaveable { mutableStateOf(false) }
     val collapsedSubagentParentIds = rememberSaveable {
         mutableStateOf(setOf<String>())
+    }
+
+    val selectedThread = remember(threads, selectedThreadId) {
+        threads.firstOrNull { it.id == selectedThreadId }
     }
     val threadGroups = remember(threads, threadSearchQuery) {
         groupThreadsByProject(threads, threadSearchQuery)
@@ -76,31 +73,28 @@ fun SidebarDrawerContent(
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
 
-    LaunchedEffect(loggerMaxLines) {
-        loggerLinesInput = loggerMaxLines.toString()
+    LaunchedEffect(selectedThread?.id) {
+        renameInput = selectedThread?.displayTitle.orEmpty()
+        isRenameMode = false
     }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 18.dp),
+            .padding(horizontal = 14.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            text = "Remodex",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+        SidebarIdentityHeader(onOpenSettings = onOpenSettings)
 
         SectionCard(
             title = "Chats",
-            subtitle = "Project groups and recent threads."
+            subtitle = "Search, create, and switch conversations."
         ) {
             OutlinedTextField(
                 value = threadSearchQuery,
                 onValueChange = { threadSearchQuery = it },
-                label = { Text("Search") },
+                label = { Text("Search conversations") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -140,7 +134,7 @@ fun SidebarDrawerContent(
 
             if (threadGroups.isEmpty()) {
                 Text(
-                    text = "No chats yet.",
+                    text = "No conversations yet.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -150,19 +144,27 @@ fun SidebarDrawerContent(
                         threads = group.threads,
                         collapsedParentIds = collapsedSubagentParentIds.value
                     )
-                    Text(
-                        text = "${group.label} (${group.threads.size})",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    if (group.kind == ThreadProjectGroupKind.PROJECT && group.projectPath != null) {
-                        val liveGroupThreadIds = group.threads.filterNot { it.isArchived }.map { it.id }
-                        if (liveGroupThreadIds.size > 1) {
-                            OutlinedButton(
-                                onClick = { onArchiveProjectGroup(liveGroupThreadIds) },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Archive Group")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${group.label} (${group.threads.size})",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (group.kind == ThreadProjectGroupKind.PROJECT && group.projectPath != null) {
+                            val liveGroupThreadIds = group.threads.filterNot { it.isArchived }.map { it.id }
+                            if (liveGroupThreadIds.size > 1) {
+                                OutlinedButton(
+                                    onClick = { onArchiveProjectGroup(liveGroupThreadIds) }
+                                ) {
+                                    Text("Archive Group")
+                                }
                             }
                         }
                     }
@@ -187,71 +189,82 @@ fun SidebarDrawerContent(
                                 null
                             }
                         )
-                        if (renameThreadId == thread.id) {
-                            OutlinedTextField(
-                                value = renameInput,
-                                onValueChange = { renameInput = it },
-                                label = { Text("Title") },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true
-                            )
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Button(
-                                    onClick = {
-                                        val normalizedName = renameInput.trim()
-                                        if (normalizedName.isNotEmpty()) {
-                                            onRenameThread(thread.id, normalizedName)
-                                            renameThreadId = null
-                                            renameInput = ""
-                                        }
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Save")
+                    }
+                }
+            }
+        }
+
+        if (selectedThread != null) {
+            SectionCard(
+                title = "Selected Chat",
+                subtitle = "Rename or archive the current conversation."
+            ) {
+                if (isRenameMode) {
+                    OutlinedTextField(
+                        value = renameInput,
+                        onValueChange = { renameInput = it },
+                        label = { Text("Title") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = {
+                                val normalizedName = renameInput.trim()
+                                if (normalizedName.isNotEmpty()) {
+                                    onRenameThread(selectedThread.id, normalizedName)
+                                    isRenameMode = false
                                 }
-                                OutlinedButton(
-                                    onClick = {
-                                        renameThreadId = null
-                                        renameInput = ""
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Cancel")
-                                }
-                            }
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                OutlinedButton(
-                                    onClick = {
-                                        renameThreadId = thread.id
-                                        renameInput = thread.displayTitle
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Rename")
-                                }
-                                OutlinedButton(
-                                    onClick = {
-                                        if (thread.isArchived) onUnarchiveThread(thread.id) else onArchiveThread(thread.id)
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text(if (thread.isArchived) "Restore" else "Archive")
-                                }
-                                OutlinedButton(
-                                    onClick = { onDeleteThreadLocally(thread.id) },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Delete")
-                                }
-                            }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Save")
                         }
+                        OutlinedButton(
+                            onClick = {
+                                renameInput = selectedThread.displayTitle
+                                isRenameMode = false
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Cancel")
+                        }
+                    }
+                } else {
+                    OutlinedButton(
+                        onClick = {
+                            renameInput = selectedThread.displayTitle
+                            isRenameMode = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Rename")
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = {
+                            if (selectedThread.isArchived) {
+                                onUnarchiveThread(selectedThread.id)
+                            } else {
+                                onArchiveThread(selectedThread.id)
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (selectedThread.isArchived) "Restore" else "Archive")
+                    }
+                    OutlinedButton(
+                        onClick = { onDeleteThreadLocally(selectedThread.id) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Delete")
                     }
                 }
             }
@@ -259,7 +272,7 @@ fun SidebarDrawerContent(
 
         SectionCard(
             title = "Workspace",
-            subtitle = "Refresh, sync, and alerts."
+            subtitle = "Refresh and Git operations."
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -269,7 +282,7 @@ fun SidebarDrawerContent(
                     onClick = { onAutoRefreshChanged(!autoRefreshEnabled) },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text(if (autoRefreshEnabled) "Auto Refresh On" else "Auto Refresh Off")
+                    Text(if (autoRefreshEnabled) "Auto On" else "Auto Off")
                 }
                 OutlinedButton(
                     onClick = onRefreshWorkspace,
@@ -299,134 +312,46 @@ fun SidebarDrawerContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (!notificationsEnabled) {
-                OutlinedButton(
-                    onClick = onRequestNotificationPermission,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Enable Notifications")
-                }
-            }
         }
 
-        SectionCard(
-            title = "Settings",
-            subtitle = "Typography, tone, and logger."
-        ) {
-            Button(
-                onClick = onOpenSettings,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Open Settings")
-            }
-            Text("Font: ${fontStyle.title}", style = MaterialTheme.typography.bodySmall)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.SYSTEM) }, modifier = Modifier.weight(1f)) {
-                    Text("System")
-                }
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST) }, modifier = Modifier.weight(1f)) {
-                    Text("Geist")
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST_MONO) }, modifier = Modifier.weight(1f)) {
-                    Text("Geist Mono")
-                }
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.JETBRAINS_MONO) }, modifier = Modifier.weight(1f)) {
-                    Text("JetBrains Mono")
-                }
-            }
-            Text("Tone: ${toneMode.name.lowercase()}", style = MaterialTheme.typography.bodySmall)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.SYSTEM) }, modifier = Modifier.weight(1f)) {
-                    Text("System")
-                }
-                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_LIGHT) }, modifier = Modifier.weight(1f)) {
-                    Text("Light")
-                }
-                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_DARK) }, modifier = Modifier.weight(1f)) {
-                    Text("Dark")
-                }
-            }
-            Text("Logger: ${loggerLevel.name}", style = MaterialTheme.typography.bodySmall)
-            OutlinedTextField(
-                value = loggerLinesInput,
-                onValueChange = { loggerLinesInput = it.filter { ch -> ch.isDigit() }.take(6) },
-                label = { Text("Max lines") },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.DEBUG) }, modifier = Modifier.weight(1f)) {
-                    Text("Debug")
-                }
-                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.INFO) }, modifier = Modifier.weight(1f)) {
-                    Text("Info")
-                }
-                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.WARN) }, modifier = Modifier.weight(1f)) {
-                    Text("Warn")
-                }
-                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.ERROR) }, modifier = Modifier.weight(1f)) {
-                    Text("Error")
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = {
-                        val current = loggerLinesInput.toIntOrNull() ?: loggerMaxLines
-                        val updated = (current - 500).coerceAtLeast(200)
-                        loggerLinesInput = updated.toString()
-                        onLoggerMaxLinesChanged(updated)
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("-500")
-                }
-                OutlinedButton(
-                    onClick = {
-                        val current = loggerLinesInput.toIntOrNull() ?: loggerMaxLines
-                        val updated = (current + 500).coerceAtMost(20_000)
-                        loggerLinesInput = updated.toString()
-                        onLoggerMaxLinesChanged(updated)
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("+500")
-                }
-                Button(
-                    onClick = {
-                        val parsed = loggerLinesInput.toIntOrNull()
-                        if (parsed != null) {
-                            onLoggerMaxLinesChanged(parsed)
-                        }
-                    },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Apply")
-                }
-            }
-        }
-
-        Button(
+        OutlinedButton(
             onClick = onDisconnect,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Disconnect")
+        }
+    }
+}
+
+@Composable
+private fun SidebarIdentityHeader(onOpenSettings: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Image(
+                painter = painterResource(id = R.drawable.original_author_icon),
+                contentDescription = "Remodex",
+                modifier = Modifier
+                    .padding(vertical = 2.dp)
+                    .size(28.dp),
+                contentScale = ContentScale.Fit
+            )
+            Text(
+                text = "Remodex",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        OutlinedButton(onClick = onOpenSettings) {
+            Text("⚙")
         }
     }
 }

@@ -82,7 +82,10 @@ enum class ReviewTarget {
 class CodexService(
     private val secureTransport: CodexSecureTransport = CodexSecureTransport(),
     private val parser: RpcTransportParser = RpcTransportParser(),
-    private val pairingStore: PairingStateStore? = null
+    private val pairingStore: PairingStateStore? = null,
+    private val fixtureTransportFactory: () -> RpcTransport = { FixtureRpcTransport() },
+    private val liveTransportFactory: (PairingPayload, CodexSecureTransport) -> RpcTransport =
+        { pairing, secure -> RealSecureRelayRpcTransport(pairing = pairing, secureTransport = secure) }
 ) {
     companion object {
         private const val LOG_TAG = "CodexService"
@@ -143,7 +146,7 @@ class CodexService(
     private val rpcMethodAliasCache = mutableMapOf<String, String>()
     private val unavailableMethodKeyCache = mutableSetOf<String>()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var rpcTransport: RpcTransport = FixtureRpcTransport()
+    private var rpcTransport: RpcTransport = fixtureTransportFactory()
     private var activeTransportLabel: String = "none"
     private var activeConnectionMode: ConnectionMode = ConnectionMode.NONE
 
@@ -202,7 +205,7 @@ class CodexService(
 
     suspend fun connectWithFixture() {
         connect(
-            transport = FixtureRpcTransport(),
+            transport = fixtureTransportFactory(),
             modeLabel = "demo fixture",
             connectionMode = ConnectionMode.FIXTURE
         )
@@ -221,7 +224,7 @@ class CodexService(
             "connectLive starting for mac=${pairing.macDeviceId} relay=${pairing.relayUrl}."
         )
         connect(
-            transport = RealSecureRelayRpcTransport(pairing = pairing, secureTransport = secureTransport),
+            transport = liveTransportFactory(pairing, secureTransport),
             modeLabel = "live secure relay",
             connectionMode = ConnectionMode.LIVE
         )
@@ -1212,27 +1215,104 @@ class CodexService(
             return
         }
 
-        val threadId = selectedThreadId.value
-            ?: threads.value.firstOrNull()?.id
-            ?: throw IllegalStateException("No thread is selected.")
-
         val normalizedFileMentions = fileMentions
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-        var imageUrlKey = "url"
-        var response = runCatching {
-            rpcTransport.request(
-                method = "turn/start",
-                params = buildTurnStartParams(
-                    threadId = threadId,
-                    normalizedInput = normalizedInput,
-                    imageUrlKey = imageUrlKey,
-                    normalizedAttachments = normalizedAttachments,
-                    skillMentions = skillMentions,
-                    fileMentions = normalizedFileMentions
-                )
+        val initialThreadId = resolveThreadIdForTurnStart()
+        runCatching {
+            requestTurnStart(
+                threadId = initialThreadId,
+                normalizedInput = normalizedInput,
+                normalizedAttachments = normalizedAttachments,
+                skillMentions = skillMentions,
+                normalizedFileMentions = normalizedFileMentions
             )
-        }.getOrElse { throw it }
+        }.onSuccess { response ->
+            handleTurnStartSuccess(
+                threadId = initialThreadId,
+                response = response,
+                normalizedFileMentions = normalizedFileMentions
+            )
+            return
+        }.onFailure { error ->
+            if (!shouldTreatAsMissingThread(error)) {
+                throw error
+            }
+            AppLogger.warn(
+                LOG_TAG,
+                "turn/start reported missing thread=$initialThreadId; recovering with continuation thread."
+            )
+        }
+
+        val continuationThreadId = recoverMissingThreadAndResolveContinuation(initialThreadId)
+        val continuationResponse = requestTurnStart(
+            threadId = continuationThreadId,
+            normalizedInput = normalizedInput,
+            normalizedAttachments = normalizedAttachments,
+            skillMentions = skillMentions,
+            normalizedFileMentions = normalizedFileMentions
+        )
+        handleTurnStartSuccess(
+            threadId = continuationThreadId,
+            response = continuationResponse,
+            normalizedFileMentions = normalizedFileMentions,
+            statusMessage = "Turn started on $continuationThreadId via $activeTransportLabel (recovered from missing thread)."
+        )
+    }
+
+    private fun shouldRetryTurnStartWithImageUrlField(rpcError: RpcError): Boolean {
+        val message = rpcError.message.lowercase()
+        if (!message.contains("image")) {
+            return false
+        }
+        return message.contains("image_url")
+            || message.contains("imageurl")
+            || message.contains("url")
+    }
+
+    private suspend fun resolveThreadIdForTurnStart(): String {
+        val selectedId = _selectedThreadId.value?.trim().orEmpty()
+        if (selectedId.isNotEmpty()) {
+            val selectedThread = _threads.value.firstOrNull { it.id == selectedId }
+            if (selectedThread != null && !selectedThread.isArchived) {
+                return selectedId
+            }
+        }
+
+        val fallbackThreadId = _threads.value.firstOrNull { !it.isArchived }?.id
+        if (!fallbackThreadId.isNullOrBlank()) {
+            _selectedThreadId.value = fallbackThreadId
+            updateCurrentProjectPathForThread(fallbackThreadId)
+            return fallbackThreadId
+        }
+
+        startThread(preferredProjectPath = normalizeProjectPath(_currentProjectPath.value))
+        val createdThreadId = _selectedThreadId.value?.trim().orEmpty()
+        if (createdThreadId.isEmpty()) {
+            throw IllegalStateException("No thread is selected.")
+        }
+        return createdThreadId
+    }
+
+    private suspend fun requestTurnStart(
+        threadId: String,
+        normalizedInput: String,
+        normalizedAttachments: List<String>,
+        skillMentions: List<SkillSuggestion>,
+        normalizedFileMentions: List<String>
+    ): RpcMessage {
+        var imageUrlKey = "url"
+        var response = rpcTransport.request(
+            method = "turn/start",
+            params = buildTurnStartParams(
+                threadId = threadId,
+                normalizedInput = normalizedInput,
+                imageUrlKey = imageUrlKey,
+                normalizedAttachments = normalizedAttachments,
+                skillMentions = skillMentions,
+                fileMentions = normalizedFileMentions
+            )
+        )
         val initialRpcError = response.error
         if (initialRpcError != null
             && normalizedAttachments.isNotEmpty()
@@ -1252,10 +1332,20 @@ class CodexService(
             )
         }
         throwIfRpcError(response, "turn/start")
+        return response
+    }
+
+    private suspend fun handleTurnStartSuccess(
+        threadId: String,
+        response: RpcMessage,
+        normalizedFileMentions: List<String>,
+        statusMessage: String? = null
+    ) {
         val turnId = (response.result as? JsonObject)?.string("turnId", "turn_id")
         if (!turnId.isNullOrBlank()) {
             activeTurnIdByThread[threadId] = turnId
         }
+        _selectedThreadId.value = threadId
         openThread(threadId, silentStatus = true)
         if (normalizedFileMentions.isNotEmpty()) {
             AppLogger.info(
@@ -1263,17 +1353,59 @@ class CodexService(
                 "turn/start sent with file mentions count=${normalizedFileMentions.size}."
             )
         }
-        setStatus("Turn started on $threadId via $activeTransportLabel.", notify = true)
+        setStatus(statusMessage ?: "Turn started on $threadId via $activeTransportLabel.", notify = true)
     }
 
-    private fun shouldRetryTurnStartWithImageUrlField(rpcError: RpcError): Boolean {
-        val message = rpcError.message.lowercase()
-        if (!message.contains("image")) {
+    private fun shouldTreatAsMissingThread(error: Throwable): Boolean {
+        val message = (error.message ?: error.localizedMessage ?: "")
+            .trim()
+            .lowercase()
+        if (message.contains("not materialized") || message.contains("not yet materialized")) {
             return false
         }
-        return message.contains("image_url")
-            || message.contains("imageurl")
-            || message.contains("url")
+        return message.contains("thread not found") || message.contains("unknown thread")
+    }
+
+    private suspend fun recoverMissingThreadAndResolveContinuation(missingThreadId: String): String {
+        val missingThread = _threads.value.firstOrNull { it.id == missingThreadId }
+        val preferredProjectPath = normalizeProjectPath(missingThread?.cwd)
+            ?: projectPathByThread[missingThreadId]
+            ?: normalizeProjectPath(_currentProjectPath.value)
+
+        activeTurnIdByThread.remove(missingThreadId)
+        locallyArchivedThreadIds.add(missingThreadId)
+        locallyDeletedThreadIds.remove(missingThreadId)
+
+        if (missingThread != null) {
+            _threads.value = _threads.value
+                .map { thread ->
+                    if (thread.id == missingThreadId) {
+                        thread.copy(isArchived = true, updatedAtMillis = System.currentTimeMillis())
+                    } else {
+                        thread
+                    }
+                }
+                .sortedWith(threadSummaryComparator())
+        }
+
+        runCatching { refreshThreads(silentStatus = true, includeTimeline = false) }
+
+        val fallbackThreadId = _threads.value
+            .firstOrNull { !it.isArchived && it.id != missingThreadId }
+            ?.id
+        if (!fallbackThreadId.isNullOrBlank()) {
+            _selectedThreadId.value = fallbackThreadId
+            updateCurrentProjectPathForThread(fallbackThreadId)
+            runCatching { openThread(fallbackThreadId, silentStatus = true) }
+            return fallbackThreadId
+        }
+
+        startThread(preferredProjectPath = preferredProjectPath)
+        val continuationThreadId = _selectedThreadId.value?.trim().orEmpty()
+        if (continuationThreadId.isEmpty()) {
+            throw IllegalStateException("Thread became unavailable and no continuation thread could be created.")
+        }
+        return continuationThreadId
     }
 
     private fun buildTurnStartParams(

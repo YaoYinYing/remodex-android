@@ -36,6 +36,6 @@ Every row must be verified before the iteration is considered complete.
 
 - `unit+build`: `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug` (pass)
 - `instrumentation`: `./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.remodex.mobile.ui.ParityUiInstrumentationTest` (pass, 6 tests)
-- `live ADB`: `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:38563 --wait-seconds 80 --skip-build` (pass)
+- `live ADB (optional/manual)`: `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:38563 --wait-seconds 80 --skip-build` (pass)
 - `logger DB`: `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:38563` (pass, redaction checks passed)
 - `UI evidence`: `/tmp/remodex-postinstall.png` captures current pairing/home shell after install; `/tmp/remodex-latest-valid.png` captures workspace shell state

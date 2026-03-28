@@ -34,5 +34,5 @@ Completion rule for this iteration: every item below must be `DONE`.
 ## Evidence
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`
 - `./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.remodex.mobile.ui.ParityUiInstrumentationTest`
-- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:38563 --wait-seconds 80 --skip-build`
+- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:38563 --wait-seconds 80 --skip-build` (optional/manual)
 - `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:38563`

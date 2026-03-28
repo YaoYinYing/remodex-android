@@ -1,0 +1,87 @@
+name: Android CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/android-ci.yml"
+      - "CodexAndroid/**"
+  push:
+    branches:
+      - main
+      - android
+    paths:
+      - ".github/workflows/android-ci.yml"
+      - "CodexAndroid/**"
+
+jobs:
+  android-build-unit:
+    name: android-build-unit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x CodexAndroid/gradlew
+
+      - name: Build debug app and run unit tests
+        working-directory: CodexAndroid
+        run: ./gradlew -g /tmp/gradle-home :app:assembleDebug :app:testDebugUnitTest :app:assembleAndroidTest
+
+      - name: Upload unit test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-unit-reports
+          path: |
+            CodexAndroid/app/build/reports/tests
+            CodexAndroid/app/build/test-results
+            CodexAndroid/app/build/reports/lint-results*
+          if-no-files-found: ignore
+
+  android-instrumentation-emulator:
+    name: android-instrumentation-emulator
+    runs-on: ubuntu-latest
+    needs: android-build-unit
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Ensure Gradle wrapper is executable
+        run: chmod +x CodexAndroid/gradlew
+
+      - name: Run connected instrumentation tests on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: cd CodexAndroid && ./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest
+
+      - name: Upload instrumentation reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-instrumentation-reports
+          path: |
+            CodexAndroid/app/build/reports/androidTests/connected
+            CodexAndroid/app/build/outputs/androidTest-results
+            CodexAndroid/app/build/outputs/connected_android_test_additional_output
+          if-no-files-found: ignore

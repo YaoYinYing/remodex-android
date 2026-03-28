@@ -18,7 +18,7 @@ DEVICE_STATE_FILE="${REMODEX_DEVICE_STATE_DIR:-${HOME}/.remodex}/device-state.js
 ADB_PATH="${ADB_PATH:-/Users/yyy/adb/adb}"
 DEVICE_SERIAL="${DEVICE_SERIAL:-}"
 RELAY_HOSTNAME="${RELAY_HOSTNAME:-192.168.31.138}"
-RELAY_PORT="${RELAY_PORT:-9100}"
+RELAY_PORT="${RELAY_PORT:-9000}"
 WAIT_SECONDS="${WAIT_SECONDS:-45}"
 SKIP_BUILD="false"
 RUN_LOG_PATH="${RUN_LOG_PATH:-/tmp/remodex-run-local-live.log}"
@@ -30,7 +30,7 @@ Usage: CodexAndroid/scripts/live_local_pairing_test.sh [options]
 
 Options:
   --hostname <ip-or-hostname>  Hostname/IP advertised by run-local-remodex (default: 192.168.31.138)
-  --port <port>                Relay port for run-local-remodex (default: 9100)
+  --port <port>                Relay port for run-local-remodex (default: 9000)
   --adb <path>                 adb path (default: /Users/yyy/adb/adb)
   --device <serial>            adb device serial (optional)
   --wait-seconds <n>           max wait for connected status (default: 45)

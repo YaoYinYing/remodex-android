@@ -54,6 +54,8 @@ private const val HANDSHAKE_TIMEOUT_MS = 12_000L
 private const val CONNECT_TIMEOUT_MS = 10_000L
 private const val OPEN_HANDSHAKE_ATTEMPTS = 5
 private const val OPEN_RETRY_DELAY_BASE_MS = 750L
+private const val LOCAL_RELAY_PORT_PRIMARY = 9000
+private const val LOCAL_RELAY_PORT_SECONDARY = 9100
 private const val LOG_TAG = "RelayTransport"
 
 class RealSecureRelayRpcTransport(
@@ -88,6 +90,9 @@ class RealSecureRelayRpcTransport(
     @Volatile
     private var lastSocketCloseCause: Throwable? = null
 
+    @Volatile
+    private var activeSessionWebSocketUrl: String? = null
+
     private var controlMessages: Channel<JsonObject> = Channel(Channel.UNLIMITED)
     private val phoneIdentity: PhoneIdentity = createPhoneIdentity()
 
@@ -105,13 +110,20 @@ class RealSecureRelayRpcTransport(
                 LOG_TAG,
                 "open() starting with maxAttempts=$OPEN_HANDSHAKE_ATTEMPTS. ${connectionTag()}"
             )
+            val candidateUrls = resolveRelaySessionWebSocketUrls()
+            val redactedCandidates = candidateUrls.joinToString(", ") { redactRelayUrl(it) }
+            AppLogger.info(LOG_TAG, "open() relay candidates=[$redactedCandidates].")
 
             var lastError: Throwable? = null
             for (attempt in 1..OPEN_HANDSHAKE_ATTEMPTS) {
                 resetHandshakeState()
+                val wsUrl = candidateUrls[(attempt - 1) % candidateUrls.size]
                 try {
-                    AppLogger.info(LOG_TAG, "open() attempt $attempt/$OPEN_HANDSHAKE_ATTEMPTS connecting socket.")
-                    connectSocket()
+                    AppLogger.info(
+                        LOG_TAG,
+                        "open() attempt $attempt/$OPEN_HANDSHAKE_ATTEMPTS connecting socket url=${redactRelayUrl(wsUrl)}."
+                    )
+                    connectSocket(wsUrl)
                     performSecureHandshake()
                     isOpen = true
                     AppLogger.info(
@@ -289,6 +301,7 @@ class RealSecureRelayRpcTransport(
         secureSession = null
         isOpen = false
         lastSocketCloseCause = null
+        activeSessionWebSocketUrl = null
     }
 
     private fun isRetryableOpenFailure(error: Throwable): Boolean {
@@ -301,9 +314,8 @@ class RealSecureRelayRpcTransport(
             message.contains("relay", ignoreCase = true)
     }
 
-    private suspend fun connectSocket() {
+    private suspend fun connectSocket(wsUrl: String) {
         val opened = CompletableDeferred<Unit>()
-        val wsUrl = resolveRelaySessionWebSocketUrl()
         AppLogger.info(LOG_TAG, "Connecting websocket to ${redactRelayUrl(wsUrl)}.")
         val request = Request.Builder()
             .url(wsUrl)
@@ -372,6 +384,7 @@ class RealSecureRelayRpcTransport(
         withTimeout(CONNECT_TIMEOUT_MS) {
             opened.await()
         }
+        activeSessionWebSocketUrl = wsUrl
         AppLogger.info(LOG_TAG, "WebSocket connect confirmed within timeout.")
     }
 
@@ -698,7 +711,13 @@ class RealSecureRelayRpcTransport(
         }
         val accepted = socket.send(text)
         if (!accepted) {
-            val error = IllegalStateException("Failed to send wire payload to relay socket.")
+            val closeDetail = lastSocketCloseCause?.message?.trim().orEmpty()
+            val errorMessage = if (closeDetail.isNotEmpty()) {
+                "Failed to send wire payload to relay socket: $closeDetail"
+            } else {
+                "Failed to send wire payload to relay socket."
+            }
+            val error = IllegalStateException(errorMessage)
             AppLogger.error(
                 LOG_TAG,
                 "Socket send returned false for kind=$payloadKind while isOpen=$isOpen. ${connectionTag()}",
@@ -710,13 +729,72 @@ class RealSecureRelayRpcTransport(
         AppLogger.debug(LOG_TAG, "Socket send accepted for kind=$payloadKind.")
     }
 
-    private fun resolveRelaySessionWebSocketUrl(): String {
+    private fun resolveRelaySessionWebSocketUrls(): List<String> {
         val relayBase = pairing.relayUrl.trim().trimEnd('/')
+        val candidates = linkedSetOf<String>()
+        candidates += buildRelaySessionWebSocketUrl(relayBase)
+
+        val relayUri = runCatching { URI(relayBase) }.getOrNull()
+        val scheme = relayUri?.scheme?.lowercase().orEmpty()
+        val relayHost = relayUri?.host
+        val relayPort = relayUri?.port ?: -1
+        val isWebSocketRelay = scheme == "ws" || scheme == "wss"
+        val shouldApplyLocalPortFallback = isWebSocketRelay
+            && isLikelyLocalRelayHost(relayHost)
+            && (relayPort == LOCAL_RELAY_PORT_PRIMARY
+                || relayPort == LOCAL_RELAY_PORT_SECONDARY
+                || relayPort == -1)
+        if (shouldApplyLocalPortFallback && relayUri != null) {
+            val fallbackPorts = listOf(LOCAL_RELAY_PORT_PRIMARY, LOCAL_RELAY_PORT_SECONDARY)
+            fallbackPorts.forEach { candidatePort ->
+                if (candidatePort == relayPort) {
+                    return@forEach
+                }
+                val normalizedPath = relayUri.rawPath?.trim().orEmpty().trimEnd('/').ifEmpty { null }
+                val fallbackRelayBase = URI(
+                    relayUri.scheme,
+                    relayUri.userInfo,
+                    relayUri.host,
+                    candidatePort,
+                    normalizedPath,
+                    relayUri.rawQuery,
+                    relayUri.rawFragment
+                ).toString().trimEnd('/')
+                candidates += buildRelaySessionWebSocketUrl(fallbackRelayBase)
+            }
+        }
+        return candidates.toList()
+    }
+
+    private fun buildRelaySessionWebSocketUrl(relayBase: String): String {
         return if (relayBase.endsWith("/relay")) {
             "$relayBase/${pairing.sessionId}"
         } else {
             "$relayBase/relay/${pairing.sessionId}"
         }
+    }
+
+    private fun isLikelyLocalRelayHost(host: String?): Boolean {
+        val normalizedHost = host?.trim()?.lowercase().orEmpty()
+        if (normalizedHost.isEmpty()) {
+            return false
+        }
+        if (normalizedHost == "localhost" || normalizedHost == "::1" || normalizedHost == "127.0.0.1") {
+            return true
+        }
+        if (normalizedHost.endsWith(".local")) {
+            return true
+        }
+        if (normalizedHost.startsWith("192.168.") || normalizedHost.startsWith("10.")) {
+            return true
+        }
+        if (normalizedHost.startsWith("172.")) {
+            val secondOctet = normalizedHost.substringAfter("172.").substringBefore('.').toIntOrNull()
+            if (secondOctet != null && secondOctet in 16..31) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun handleSocketClosed(socket: WebSocket, cause: Throwable) {
@@ -767,6 +845,7 @@ class RealSecureRelayRpcTransport(
         isOpen = false
         secureSession = null
         lastSocketCloseCause = null
+        activeSessionWebSocketUrl = null
         runCatching { webSocket?.close(1000, "client_close") }
         webSocket = null
     }
@@ -873,8 +952,8 @@ class RealSecureRelayRpcTransport(
     }
 
     private fun relayHostLabel(): String {
-        return runCatching { URI(pairing.relayUrl.trim()).host }.getOrNull()
-            ?: pairing.relayUrl.trim()
+        val relayUrl = activeSessionWebSocketUrl ?: pairing.relayUrl.trim()
+        return runCatching { URI(relayUrl).host }.getOrNull() ?: relayUrl
     }
 
     private fun sessionHash(value: String): String {

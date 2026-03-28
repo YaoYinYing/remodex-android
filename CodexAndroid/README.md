@@ -43,7 +43,7 @@ Native Android client foundation for full-parity Remodex delivery.
 ## Parity gate status
 
 1. `TODO-01` through `TODO-20` are marked `DONE` in parity models and acceptance matrix
-2. Live local relay pairing/injection is validated with `CodexAndroid/scripts/live_local_pairing_test.sh`
+2. Live local relay pairing/injection is optional/manual via `CodexAndroid/scripts/live_local_pairing_test.sh` (not CI-gated)
 3. Logger SQLite persistence and sensitive-redaction checks are validated with `CodexAndroid/scripts/logger_db_self_test.sh`
 4. Silent dev paywall remains in place without public pricing copy
 
@@ -53,9 +53,15 @@ Native Android client foundation for full-parity Remodex delivery.
 cd CodexAndroid
 ./gradlew -g /tmp/gradle-home :app:assembleDebug :app:testDebugUnitTest
 ./gradlew -g /tmp/gradle-home :app:assembleAndroidTest
-/Users/yyy/adb/adb install -r app/build/outputs/apk/debug/app-debug.apk
-/Users/yyy/adb/adb install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-/Users/yyy/adb/adb shell am instrument -w com.remodex.mobile.test/androidx.test.runner.AndroidJUnitRunner
-bash ./scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:38563 --wait-seconds 70 --skip-build
+./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest
+## Optional manual live validation only:
+bash ./scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:38563 --wait-seconds 70 --skip-build
 bash ./scripts/logger_db_self_test.sh --device 192.168.31.185:38563
 ```
+
+## CI gating
+
+- Workflow: `.github/workflows/android-ci.yml`
+- Required checks to enforce in GitHub branch protection:
+  - `android-build-unit`
+  - `android-instrumentation-emulator`

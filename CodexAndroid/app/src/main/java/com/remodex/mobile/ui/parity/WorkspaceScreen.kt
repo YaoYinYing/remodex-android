@@ -65,9 +65,6 @@ import com.remodex.mobile.service.PendingPermissionRequest
 import com.remodex.mobile.service.ReviewTarget
 import com.remodex.mobile.service.SkillSuggestion
 import com.remodex.mobile.service.TurnImageAttachment
-import com.remodex.mobile.service.logging.LoggerLevel
-import com.remodex.mobile.ui.theme.AppFontStyle
-import com.remodex.mobile.ui.theme.AppToneMode
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -92,23 +89,11 @@ fun WorkspaceScreen(
     gitBranches: List<String>,
     checkoutBranch: String,
     onCheckoutBranchChange: (String) -> Unit,
-    commitMessage: String,
-    onCommitMessageChange: (String) -> Unit,
     threads: List<ThreadSummary>,
     selectedThreadId: String?,
     timeline: List<TimelineEntry>,
     composerInput: String,
     onComposerInputChange: (String) -> Unit,
-    notificationsEnabled: Boolean,
-    onRequestNotificationPermission: () -> Unit,
-    fontStyle: AppFontStyle,
-    toneMode: AppToneMode,
-    onFontStyleChanged: (AppFontStyle) -> Unit,
-    onToneModeChanged: (AppToneMode) -> Unit,
-    loggerLevel: LoggerLevel,
-    loggerMaxLines: Int,
-    onLoggerLevelChanged: (LoggerLevel) -> Unit,
-    onLoggerMaxLinesChanged: (Int) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPairing: () -> Unit,
     onHeaderTap: () -> Unit
@@ -334,12 +319,6 @@ fun WorkspaceScreen(
                     },
                     rateLimitInfo = rateLimitInfo,
                     ciStatus = ciStatus,
-                    notificationsEnabled = notificationsEnabled,
-                    fontStyle = fontStyle,
-                    toneMode = toneMode,
-                    onFontStyleChanged = onFontStyleChanged,
-                    onToneModeChanged = onToneModeChanged,
-                    onRequestNotificationPermission = onRequestNotificationPermission,
                     autoRefreshEnabled = autoRefreshEnabled,
                     onAutoRefreshChanged = { autoRefreshEnabled = it },
                     onRefreshWorkspace = {
@@ -347,10 +326,6 @@ fun WorkspaceScreen(
                             runCatching { service.forceRefreshWorkspace() }
                         }
                     },
-                    loggerLevel = loggerLevel,
-                    loggerMaxLines = loggerMaxLines,
-                    onLoggerLevelChanged = onLoggerLevelChanged,
-                    onLoggerMaxLinesChanged = onLoggerMaxLinesChanged,
                     onOpenSettings = {
                         scope.launch { runCatching { drawerState.close() } }
                         onOpenSettings()
