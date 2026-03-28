@@ -66,70 +66,86 @@ jobs:
       - name: Ensure Gradle wrapper is executable
         run: chmod +x CodexAndroid/gradlew
 
-      - name: Run connected instrumentation tests on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          arch: x86_64
-          target: google_apis
-          profile: pixel_6
-          disable-animations: true
-          script: |
-            ADB_SERIAL="emulator-5554"
-            adb start-server
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-            state_wait=0
-            while [ "$state_wait" -lt 120 ]; do
-              adb_state="$(adb -s "$ADB_SERIAL" get-state 2>/dev/null || true)"
-              if [ "$adb_state" = "device" ]; then
-                break
-              fi
-              if [ "$adb_state" = "offline" ]; then
-                adb kill-server >/dev/null 2>&1 || true
-                adb start-server >/dev/null 2>&1 || true
-              fi
-              state_wait=$((state_wait + 1))
-              sleep 2
-            done
-            if [ "$adb_state" != "device" ]; then
-              echo "ADB never reached device state for $ADB_SERIAL (last state: ${adb_state:-unknown})."
-              adb devices -l || true
-              exit 1
+      - name: Install SDK components and create AVD
+        shell: bash
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            ABI="arm64-v8a"
+          else
+            ABI="x86_64"
+          fi
+          SYSTEM_IMAGE="system-images;android-30;google_apis;${ABI}"
+          echo "SYSTEM_IMAGE=${SYSTEM_IMAGE}" >> "${GITHUB_ENV}"
+
+          yes | sdkmanager --licenses > /dev/null
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-30" \
+            "emulator" \
+            "${SYSTEM_IMAGE}"
+
+          echo "no" | avdmanager create avd --force --name ci-api30 --package "${SYSTEM_IMAGE}" --device "pixel_6"
+
+      - name: Boot emulator and run instrumentation tests
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          nohup "${SDK_ROOT}/emulator/emulator" \
+            -avd ci-api30 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -gpu swiftshader_indirect \
+            > /tmp/ci-emulator.log 2>&1 &
+          echo "EMU_PID=$!" >> "${GITHUB_ENV}"
+
+          adb start-server
+
+          wait_count=0
+          while [[ "${wait_count}" -lt 240 ]]; do
+            adb_state="$(adb get-state 2>/dev/null || true)"
+            boot_state="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            if [[ "${adb_state}" == "device" && "${boot_state}" == "1" ]]; then
+              break
             fi
-
-            boot_wait=0
-            while [ "$boot_wait" -lt 180 ]; do
-              boot_state="$(adb -s "$ADB_SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
-              if [ "$boot_state" = "1" ]; then
-                break
-              fi
-              boot_wait=$((boot_wait + 1))
-              sleep 2
-            done
-            if [ "$boot_state" != "1" ]; then
-              echo "Emulator did not report sys.boot_completed=1 in time."
-              adb devices -l || true
-              adb -s "$ADB_SERIAL" shell getprop || true
-              exit 1
+            if [[ "${adb_state}" == "offline" ]]; then
+              adb kill-server >/dev/null 2>&1 || true
+              adb start-server >/dev/null 2>&1 || true
             fi
+            wait_count=$((wait_count + 1))
+            sleep 2
+          done
 
-            package_wait=0
-            while [ "$package_wait" -lt 120 ]; do
-              if adb -s "$ADB_SERIAL" shell cmd package path android >/dev/null 2>&1; then
-                break
-              fi
-              package_wait=$((package_wait + 1))
-              sleep 2
-            done
-            if ! adb -s "$ADB_SERIAL" shell cmd package path android >/dev/null 2>&1; then
-              echo "Package manager service is not ready."
-              adb devices -l || true
-              adb -s "$ADB_SERIAL" shell getprop || true
-              exit 1
-            fi
+          if [[ "${adb_state:-}" != "device" || "${boot_state:-}" != "1" ]]; then
+            echo "Emulator failed readiness checks. adb_state=${adb_state:-unknown} boot=${boot_state:-unknown}"
+            adb devices -l || true
+            tail -n 200 /tmp/ci-emulator.log || true
+            exit 1
+          fi
 
-            cd CodexAndroid
-            ./gradlew :app:connectedDebugAndroidTest
+          if ! adb shell cmd package path android >/dev/null 2>&1; then
+            echo "Package manager not ready after boot."
+            adb devices -l || true
+            adb shell getprop || true
+            tail -n 200 /tmp/ci-emulator.log || true
+            exit 1
+          fi
+
+          cd CodexAndroid
+          ./gradlew :app:connectedDebugAndroidTest
+
+      - name: Shutdown emulator
+        if: always()
+        shell: bash
+        run: |
+          adb emu kill >/dev/null 2>&1 || true
+          if [[ -n "${EMU_PID:-}" ]]; then
+            kill "${EMU_PID}" >/dev/null 2>&1 || true
+          fi
 
       - name: Upload instrumentation reports on failure
         if: failure()
