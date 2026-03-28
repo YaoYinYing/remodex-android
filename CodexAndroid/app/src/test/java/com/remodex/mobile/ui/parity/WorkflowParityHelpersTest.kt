@@ -11,10 +11,12 @@ class WorkflowParityHelpersTest {
         val file = detectComposerAutocompleteToken("check @CodexService")
         val skill = detectComposerAutocompleteToken("run \$openai-docs")
         val command = detectComposerAutocompleteToken("/status")
+        val commandBare = detectComposerAutocompleteToken("/")
 
         assertTrue(file is ComposerAutocompleteToken.File)
         assertTrue(skill is ComposerAutocompleteToken.Skill)
         assertTrue(command is ComposerAutocompleteToken.Command)
+        assertTrue(commandBare is ComposerAutocompleteToken.Command)
     }
 
     @Test

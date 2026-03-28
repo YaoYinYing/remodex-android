@@ -106,12 +106,15 @@ fun WorkspaceScreen(
     loggerMaxLines: Int,
     onLoggerLevelChanged: (LoggerLevel) -> Unit,
     onLoggerMaxLinesChanged: (Int) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenPairing: () -> Unit,
     onHeaderTap: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val isConnected = connectionState == ConnectionState.Connected
     val selectedThread = threads.firstOrNull { it.id == selectedThreadId && !it.isArchived }
+    val trustedPairing = service.currentPairing()
     val normalizedProjectPath = currentProjectPath
         .takeUnless { it == "Project path not resolved." }
         ?.trim()
@@ -131,7 +134,6 @@ fun WorkspaceScreen(
         }
     }
     var queuePaused by rememberSaveable { mutableStateOf(false) }
-    var showSettingsView by rememberSaveable { mutableStateOf(false) }
     val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
     var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
@@ -302,7 +304,7 @@ fun WorkspaceScreen(
                     onLoggerMaxLinesChanged = onLoggerMaxLinesChanged,
                     onOpenSettings = {
                         scope.launch { runCatching { drawerState.close() } }
-                        showSettingsView = true
+                        onOpenSettings()
                     },
                     onGitPull = {
                         scope.launch { runCatching { service.gitPull() } }
@@ -379,42 +381,26 @@ fun WorkspaceScreen(
                     progress = refreshGestureDelta
                 )
 
-                if (showSettingsView) {
-                    WorkspaceSettingsScreen(
-                        connectionState = connectionState,
-                        status = status,
-                        selectedModel = selectedModel,
-                        availableModels = availableModels,
-                        currentProjectPath = normalizedProjectPath,
-                        notificationsEnabled = notificationsEnabled,
-                        fontStyle = fontStyle,
-                        toneMode = toneMode,
-                        loggerLevel = loggerLevel,
-                        loggerMaxLines = loggerMaxLines,
-                        onClose = { showSettingsView = false },
-                        onRequestNotificationPermission = onRequestNotificationPermission,
-                        onFontStyleChanged = onFontStyleChanged,
-                        onToneModeChanged = onToneModeChanged,
-                        onLoggerLevelChanged = onLoggerLevelChanged,
-                        onLoggerMaxLinesChanged = onLoggerMaxLinesChanged,
-                        onSwitchModel = { model ->
-                            scope.launch { runCatching { service.switchModel(model) } }
-                        },
-                        onDisconnect = {
-                            scope.launch { runCatching { service.disconnect() } }
-                            showSettingsView = false
-                        }
-                    )
-                } else if (selectedThread == null) {
+                if (selectedThread == null) {
                     EmptyWorkspaceHome(
                         connectionState = connectionState,
                         status = status,
+                        trustedPairLabel = trustedPairing?.let { pairing ->
+                            "Trusted Mac: ${pairing.macDeviceId} · ${pairing.relayUrl}"
+                        },
                         projectPath = normalizedProjectPath,
                         rateLimitInfo = rateLimitInfo,
                         ciStatus = ciStatus,
                         onOpenSidebar = {
                             scope.launch { drawerState.open() }
                         },
+                        onOpenPairing = onOpenPairing,
+                        onReconnect = {
+                            scope.launch {
+                                runCatching { service.connectLive() }
+                            }
+                        },
+                        onForgetPair = { service.forgetPairing() },
                         onStartThread = {
                             scope.launch {
                                 runCatching { service.startThread(preferredProjectPath = normalizedProjectPath) }
@@ -472,7 +458,7 @@ fun WorkspaceScreen(
                                     )
                                 }
                             } else {
-                                items(timeline.takeLast(32), key = { it.id }) { entry ->
+                                items(timeline, key = { it.id }) { entry ->
                                     TimelineRow(item = entry)
                                 }
                             }
@@ -781,10 +767,14 @@ private fun CompactRefreshStrip(
 private fun EmptyWorkspaceHome(
     connectionState: ConnectionState,
     status: String,
+    trustedPairLabel: String?,
     projectPath: String?,
     rateLimitInfo: String,
     ciStatus: String,
     onOpenSidebar: () -> Unit,
+    onOpenPairing: () -> Unit,
+    onReconnect: () -> Unit,
+    onForgetPair: () -> Unit,
     onStartThread: () -> Unit
 ) {
     Column(
@@ -796,11 +786,34 @@ private fun EmptyWorkspaceHome(
         EmptyHomeCard(
             connectionState = connectionState,
             status = status,
+            trustedPairLabel = trustedPairLabel,
             projectPath = projectPath,
             rateLimitInfo = rateLimitInfo,
             ciStatus = ciStatus,
-            onOpenSidebar = onOpenSidebar,
-            onStartThread = onStartThread
+            primaryActionLabel = when (connectionState) {
+                ConnectionState.Connected -> "New Chat"
+                ConnectionState.Connecting -> "Reconnecting..."
+                ConnectionState.Paired -> "Reconnect"
+                ConnectionState.Disconnected -> "Reconnect"
+                is ConnectionState.Failed -> "Reconnect"
+            },
+            onPrimaryAction = when (connectionState) {
+                ConnectionState.Connected -> onStartThread
+                else -> onReconnect
+            },
+            secondaryActionLabel = when (connectionState) {
+                ConnectionState.Connected -> "Sidebar"
+                else -> "Scan QR"
+            },
+            onSecondaryAction = when (connectionState) {
+                ConnectionState.Connected -> onOpenSidebar
+                else -> onOpenPairing
+            },
+            onForgetPair = if (connectionState == ConnectionState.Connected) {
+                null
+            } else {
+                onForgetPair
+            }
         )
     }
 }

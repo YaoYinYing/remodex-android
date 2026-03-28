@@ -49,6 +49,7 @@ fun PairingScreen(
     onRememberPairing: () -> Unit,
     onConnectLive: () -> Unit,
     onScannedPairing: (PairingPayload) -> Unit,
+    scannerEnabled: Boolean = true,
     onHeaderTap: () -> Unit
 ) {
     var showManualEntry by rememberSaveable { mutableStateOf(false) }
@@ -102,28 +103,36 @@ fun PairingScreen(
                     subtitle = "Point the camera at the secure code shown by `remodex up`."
                 ) {
                     if (bridgeUpdatePrompt == null) {
-                        PairingQrScannerSurface(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(340.dp),
-                            onScan = { scannedCode ->
-                                when (val result = validatePairingQrCode(scannedCode)) {
-                                    is QrScannerPairingValidationResult.Success -> {
-                                        onScannedPairing(result.payload)
-                                        bridgeUpdatePrompt = null
-                                    }
+                        if (scannerEnabled) {
+                            PairingQrScannerSurface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(340.dp),
+                                onScan = { scannedCode ->
+                                    when (val result = validatePairingQrCode(scannedCode)) {
+                                        is QrScannerPairingValidationResult.Success -> {
+                                            onScannedPairing(result.payload)
+                                            bridgeUpdatePrompt = null
+                                        }
 
-                                    is QrScannerPairingValidationResult.ScanError -> {
-                                        scannerErrorMessage = result.message
-                                    }
+                                        is QrScannerPairingValidationResult.ScanError -> {
+                                            scannerErrorMessage = result.message
+                                        }
 
-                                    is QrScannerPairingValidationResult.BridgeUpdateRequired -> {
-                                        didCopyBridgeCommand = false
-                                        bridgeUpdatePrompt = result.prompt
+                                        is QrScannerPairingValidationResult.BridgeUpdateRequired -> {
+                                            didCopyBridgeCommand = false
+                                            bridgeUpdatePrompt = result.prompt
+                                        }
                                     }
                                 }
-                            }
-                        )
+                            )
+                        } else {
+                            Text(
+                                text = "Scanner preview disabled in test mode.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     } else {
                         val prompt = bridgeUpdatePrompt ?: return@SectionCard
                         Text(

@@ -174,20 +174,18 @@ fun detectComposerAutocompleteToken(input: String): ComposerAutocompleteToken? {
         return null
     }
     val token = input.substring(tokenStart, end)
-    if (token.length < 2) {
+    val prefix = token.firstOrNull() ?: return null
+    if (token.length < 2 && prefix != '/') {
         return null
     }
 
-    val prefix = token.first()
     val query = token.substring(1).trim()
-    if (query.isEmpty()) {
-        return null
-    }
-
     return when (prefix) {
-        '@' -> ComposerAutocompleteToken.File(query, tokenStart, end)
+        '@' -> query.takeIf { it.isNotEmpty() }?.let {
+            ComposerAutocompleteToken.File(it, tokenStart, end)
+        }
         '$' -> {
-            if (query.all(Char::isDigit)) {
+            if (query.isEmpty() || query.all(Char::isDigit)) {
                 null
             } else {
                 ComposerAutocompleteToken.Skill(query, tokenStart, end)

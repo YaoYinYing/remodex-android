@@ -12,6 +12,10 @@ class CodexSecureTransport {
 
     fun currentPairing(): PairingPayload? = pairingPayload
 
+    fun clearPairing() {
+        pairingPayload = null
+    }
+
     fun buildTranscriptBytes(input: SecureTranscriptInput): ByteArray {
         return CodexSecureTranscript.buildTranscriptBytes(input)
     }

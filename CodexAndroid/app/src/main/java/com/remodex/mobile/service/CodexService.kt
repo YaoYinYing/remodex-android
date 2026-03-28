@@ -170,6 +170,31 @@ class CodexService(
 
     fun currentPairing(): PairingPayload? = secureTransport.currentPairing()
 
+    fun forgetPairing() {
+        AppLogger.info(LOG_TAG, "forgetPairing requested.")
+        rpcTransport.setServerMessageListener(null)
+        serviceScope.launch {
+            runCatching { rpcTransport.close() }
+        }
+        secureTransport.clearPairing()
+        pairingStore?.clear()
+        activeConnectionMode = ConnectionMode.NONE
+        _connectionState.value = ConnectionState.Disconnected
+        _threads.value = emptyList()
+        _selectedThreadId.value = null
+        _timeline.value = emptyList()
+        _gitStatusSummary.value = "Git status not loaded."
+        _gitBranches.value = emptyList()
+        _currentProjectPath.value = "Project path not resolved."
+        activeTurnIdByThread.clear()
+        projectPathByThread.clear()
+        locallyArchivedThreadIds.clear()
+        locallyDeletedThreadIds.clear()
+        rpcMethodAliasCache.clear()
+        unavailableMethodKeyCache.clear()
+        setStatus("Pairing removed. Scan a new QR code to reconnect.", notify = true)
+    }
+
     suspend fun connectWithFixture() {
         connect(
             transport = FixtureRpcTransport(),
@@ -346,8 +371,8 @@ class CodexService(
         if (rawMethod.isEmpty()) {
             return
         }
-        val method = normalizeIncomingMethodName(rawMethod)
         val params = message.params as? JsonObject ?: JsonObject(emptyMap())
+        val method = normalizeIncomingMethodName(rawMethod, params)
         AppLogger.info(LOG_TAG, "Inbound server message method=$method")
         when (method) {
             "thread/started" -> handleThreadStartedNotification(params)
@@ -419,8 +444,15 @@ class CodexService(
             "codex/event/agent_message" -> handleItemCompletedNotification(params)
             "item/started",
             "codex/event/item_started" -> handleItemStartedNotification(params)
+            "item/tool/requestUserInput" -> {
+                setStatus("User input required to continue tool execution.", notify = true, eventKind = ServiceEventKind.PERMISSION_REQUIRED)
+            }
             "error",
             "codex/event/error" -> handleTurnFailedNotification(params)
+            "serverRequest/resolved" -> {
+                val resolution = params.string("status", "result", "message") ?: "resolved"
+                setStatus("Server request resolved: $resolution")
+            }
             else -> {
                 if (method.startsWith("codex/event/")) {
                     handleGenericCodexEventNotification(method = method, params = params)
@@ -429,10 +461,19 @@ class CodexService(
         }
     }
 
-    private fun normalizeIncomingMethodName(method: String): String {
+    private fun normalizeIncomingMethodName(method: String, params: JsonObject): String {
         val trimmed = method.trim()
         if (trimmed == "item/agent_message/delta") {
             return "item/agentMessage/delta"
+        }
+        if (trimmed == "codex/event") {
+            val msgObject = params["msg"] as? JsonObject
+            val eventName = params.string("event", "type")
+                ?: msgObject?.string("event", "type")
+            val normalizedEvent = normalizeNotificationType(eventName)
+            if (normalizedEvent.isNotEmpty()) {
+                return "codex/event/$normalizedEvent"
+            }
         }
         return trimmed
     }
@@ -494,7 +535,8 @@ class CodexService(
 
     private fun handleTurnStartedNotification(params: JsonObject) {
         val threadId = resolveThreadIdFromNotification(params) ?: return
-        val turnId = params.string("turnId", "turn_id", "id") ?: return
+        val turnId = params.string("turnId", "turn_id", "id")
+            ?: "pending-$threadId-${System.currentTimeMillis()}"
         activeTurnIdByThread[threadId] = turnId
         updateThreadTimestamp(threadId)
         setStatus("Turn started on $threadId via $activeTransportLabel.")
@@ -744,7 +786,20 @@ class CodexService(
         metaObject?.string("threadId", "thread_id")?.let { return it }
         val msgObject = params["msg"] as? JsonObject
         msgObject?.string("threadId", "thread_id")?.let { return it }
-        return _selectedThreadId.value
+        val turnId = params.string("turnId", "turn_id", "id")
+        if (!turnId.isNullOrBlank()) {
+            activeTurnIdByThread.entries.firstOrNull { (_, activeTurnId) ->
+                activeTurnId == turnId
+            }?.key?.let { return it }
+        }
+        val selectedThreadId = _selectedThreadId.value
+        if (!selectedThreadId.isNullOrBlank()) {
+            val activeThreads = _threads.value.filterNot { it.isArchived }
+            if (activeThreads.size <= 1) {
+                return selectedThreadId
+            }
+        }
+        return null
     }
 
     private fun extractNotificationText(params: JsonObject): String? {
@@ -1168,7 +1223,8 @@ class CodexService(
                     normalizedInput = normalizedInput,
                     imageUrlKey = imageUrlKey,
                     normalizedAttachments = normalizedAttachments,
-                    skillMentions = skillMentions
+                    skillMentions = skillMentions,
+                    fileMentions = normalizedFileMentions
                 )
             )
         }.getOrElse { throw it }
@@ -1185,7 +1241,8 @@ class CodexService(
                     normalizedInput = normalizedInput,
                     imageUrlKey = imageUrlKey,
                     normalizedAttachments = normalizedAttachments,
-                    skillMentions = skillMentions
+                    skillMentions = skillMentions,
+                    fileMentions = normalizedFileMentions
                 )
             )
         }
@@ -1219,7 +1276,8 @@ class CodexService(
         normalizedInput: String,
         imageUrlKey: String,
         normalizedAttachments: List<String>,
-        skillMentions: List<SkillSuggestion>
+        skillMentions: List<SkillSuggestion>,
+        fileMentions: List<String>
     ): JsonObject {
         val inputItems = mutableListOf<kotlinx.serialization.json.JsonElement>()
 
@@ -1262,6 +1320,20 @@ class CodexService(
                 }
                 inputItems += JsonObject(payload)
             }
+
+        fileMentions.forEach { filePath ->
+            val normalizedPath = filePath.trim()
+            if (normalizedPath.isEmpty()) {
+                return@forEach
+            }
+            inputItems += JsonObject(
+                mapOf(
+                    "type" to JsonPrimitive("file"),
+                    "path" to JsonPrimitive(normalizedPath),
+                    "name" to JsonPrimitive(normalizedPath.substringAfterLast('/').substringAfterLast('\\'))
+                )
+            )
+        }
 
         return JsonObject(
             mapOf(
@@ -1444,7 +1516,12 @@ class CodexService(
         val threadId = selectedThreadId.value
             ?: threads.value.firstOrNull()?.id
             ?: throw IllegalStateException("No thread is selected.")
-        val resolvedTurnId = activeTurnIdByThread[threadId] ?: resolveInterruptTurnId(threadId)
+        val cachedTurnId = activeTurnIdByThread[threadId]
+        val resolvedTurnId = if (!cachedTurnId.isNullOrBlank() && !cachedTurnId.startsWith("pending-")) {
+            cachedTurnId
+        } else {
+            resolveInterruptTurnId(threadId)
+        }
         if (resolvedTurnId.isNullOrBlank()) {
             throw IllegalStateException("No active turn found for $threadId.")
         }

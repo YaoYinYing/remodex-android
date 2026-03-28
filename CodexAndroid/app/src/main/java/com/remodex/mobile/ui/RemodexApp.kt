@@ -22,6 +22,7 @@ import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
 import com.remodex.mobile.ui.parity.PaywallScreen
 import com.remodex.mobile.ui.parity.WorkspaceScreen
+import com.remodex.mobile.ui.parity.WorkspaceSettingsScreen
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
 import com.remodex.mobile.ui.theme.RemodexTheme
@@ -41,6 +42,7 @@ private enum class AppGate {
     ONBOARDING,
     PAYWALL,
     PAIRING,
+    SETTINGS,
     WORKSPACE
 }
 
@@ -87,6 +89,8 @@ fun RemodexApp(
         mutableStateOf(prefs.getInt(PREF_LOGGER_MAX_LINES, 3_000).coerceIn(200, 20_000))
     }
     var showLoggerView by rememberSaveable { mutableStateOf(false) }
+    var forcePairingView by rememberSaveable { mutableStateOf(false) }
+    var showSettingsRoute by rememberSaveable { mutableStateOf(false) }
     val headerTapTimes = remember { ArrayDeque<Long>() }
 
     val fontStyle = AppFontStyle.fromStorage(fontStyleRaw)
@@ -154,10 +158,15 @@ fun RemodexApp(
         }
     }
 
+    val hasSavedPairing = service.currentPairing() != null
+
     val gate = when {
         !hasSeenOnboarding -> AppGate.ONBOARDING
         !hasProAccess -> AppGate.PAYWALL
         connectionState == ConnectionState.Connected -> AppGate.WORKSPACE
+        showSettingsRoute && hasSavedPairing -> AppGate.SETTINGS
+        forcePairingView -> AppGate.PAIRING
+        hasSavedPairing -> AppGate.WORKSPACE
         else -> AppGate.PAIRING
     }
 
@@ -210,8 +219,10 @@ fun RemodexApp(
                                     expiresAt = expiresAt
                                 )
                             )
+                            forcePairingView = false
                         },
                         onConnectLive = {
+                            forcePairingView = false
                             scope.launch {
                                 runCatching { service.connectLive() }
                             }
@@ -222,6 +233,7 @@ fun RemodexApp(
                             macDeviceId = scannedPayload.macDeviceId
                             macIdentityPublicKey = scannedPayload.macIdentityPublicKey
                             expiresAt = scannedPayload.expiresAt
+                            forcePairingView = false
                             service.rememberPairing(scannedPayload)
                             scope.launch {
                                 runCatching { service.connectLive() }
@@ -262,7 +274,46 @@ fun RemodexApp(
                         loggerMaxLines = loggerMaxLines,
                         onLoggerLevelChanged = { level -> loggerLevelRaw = level.name },
                         onLoggerMaxLinesChanged = { maxLines -> loggerMaxLines = maxLines.coerceIn(200, 20_000) },
+                        onOpenSettings = { showSettingsRoute = true },
+                        onOpenPairing = { forcePairingView = true },
                         onHeaderTap = onHeaderTap
+                    )
+                }
+                AppGate.SETTINGS -> {
+                    WorkspaceSettingsScreen(
+                        connectionState = connectionState,
+                        status = status,
+                        selectedModel = selectedModel,
+                        availableModels = availableModels,
+                        currentProjectPath = currentProjectPath
+                            .takeUnless { it == "Project path not resolved." }
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() },
+                        trustedPairLabel = service.currentPairing()?.let { pairing ->
+                            "Trusted Mac: ${pairing.macDeviceId} · ${pairing.relayUrl}"
+                        },
+                        notificationsEnabled = notificationsEnabled,
+                        fontStyle = fontStyle,
+                        toneMode = toneMode,
+                        loggerLevel = loggerLevel,
+                        loggerMaxLines = loggerMaxLines,
+                        onClose = { showSettingsRoute = false },
+                        onRequestNotificationPermission = onRequestNotificationPermission,
+                        onFontStyleChanged = { style -> fontStyleRaw = style.storageValue },
+                        onToneModeChanged = { mode -> toneModeRaw = mode.name },
+                        onLoggerLevelChanged = { level -> loggerLevelRaw = level.name },
+                        onLoggerMaxLinesChanged = { maxLines -> loggerMaxLines = maxLines.coerceIn(200, 20_000) },
+                        onSwitchModel = { model ->
+                            scope.launch { runCatching { service.switchModel(model) } }
+                        },
+                        onDisconnect = {
+                            scope.launch { runCatching { service.disconnect() } }
+                            showSettingsRoute = false
+                        },
+                        onForgetPair = {
+                            service.forgetPairing()
+                            showSettingsRoute = false
+                        }
                     )
                 }
             }

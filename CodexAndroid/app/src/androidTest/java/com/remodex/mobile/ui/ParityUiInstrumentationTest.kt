@@ -64,6 +64,7 @@ class ParityUiInstrumentationTest {
                     onRememberPairing = {},
                     onConnectLive = {},
                     onScannedPairing = {},
+                    scannerEnabled = false,
                     onHeaderTap = {}
                 )
             }
@@ -109,6 +110,8 @@ class ParityUiInstrumentationTest {
                     loggerMaxLines = 3000,
                     onLoggerLevelChanged = {},
                     onLoggerMaxLinesChanged = {},
+                    onOpenSettings = {},
+                    onOpenPairing = {},
                     onHeaderTap = {}
                 )
             }
@@ -122,6 +125,7 @@ class ParityUiInstrumentationTest {
     @Test
     fun workspaceSettingsRouteOpensFromDrawer() {
         val service = CodexService()
+        var openSettingsInvoked = false
 
         composeRule.setContent {
             RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_LIGHT) {
@@ -156,6 +160,8 @@ class ParityUiInstrumentationTest {
                     loggerMaxLines = 3000,
                     onLoggerLevelChanged = {},
                     onLoggerMaxLinesChanged = {},
+                    onOpenSettings = { openSettingsInvoked = true },
+                    onOpenPairing = {},
                     onHeaderTap = {}
                 )
             }
@@ -163,7 +169,9 @@ class ParityUiInstrumentationTest {
 
         composeRule.onNodeWithText("Menu").performClick()
         composeRule.onNodeWithText("Open Settings").performClick()
-        composeRule.onNodeWithText("Runtime Defaults").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertTrue(openSettingsInvoked)
+        }
     }
 
     @Test

@@ -22,9 +22,15 @@ Completion rule for this iteration: every item below must be `DONE`.
 | IW-12 | Add subagent hierarchy flattening and collapse affordance in grouped thread lists. | `SidebarThreadListView.swift` parent/subagent tree behavior | DONE |
 | IW-13 | Add dedicated settings surface (runtime defaults, appearance, connection, diagnostics) accessible from workspace flow. | `SettingsView.swift` card-based navigation target | DONE |
 | IW-14 | Expand incoming event-stream coverage for plan/reasoning/tool/file/command/diff/account/rate update paths. | `CodexService+Incoming.swift` method routing parity | DONE |
+| IW-15 | Stabilize root gate logic by deriving pairing/workspace routing from persisted service pairing state instead of editable text buffers. | `ContentView.swift` root orchestration + saved reconnect behavior | DONE |
+| IW-16 | Keep disconnected paired users on the workspace empty shell with reconnect + scan-new-QR controls (not forced back to full pairing shell). | `HomeEmptyStateView.swift`, website “Trusted devices auto-reconnect” | DONE |
+| IW-17 | Add trusted-pair visibility + forget-pair action in workspace empty state and settings. | `SettingsView.swift` connection card + trusted pair controls | DONE |
+| IW-18 | Promote settings from local workspace overlay toggle to app-level route gating in root flow. | `ContentView.swift` settings destination semantics | DONE |
+| IW-19 | Ensure live local pairing script auto-installs app when instrumentation runs removed the package, preventing false negative “activity not found” failures. | local-first live test reliability requirement | DONE |
+| IW-20 | Re-verify parity evidence pack after the above root-flow and settings changes on physical device. | iteration gate policy | DONE |
 
 ## Evidence
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`
 - `./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.remodex.mobile.ui.ParityUiInstrumentationTest`
-- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:38563 --wait-seconds 70`
+- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:38563 --wait-seconds 80 --skip-build`
 - `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:38563`

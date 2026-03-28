@@ -254,11 +254,15 @@ fun InlineStatusCard(
 fun EmptyHomeCard(
     connectionState: ConnectionState,
     status: String,
+    trustedPairLabel: String?,
     projectPath: String?,
     rateLimitInfo: String,
     ciStatus: String,
-    onOpenSidebar: () -> Unit,
-    onStartThread: () -> Unit
+    primaryActionLabel: String,
+    onPrimaryAction: () -> Unit,
+    secondaryActionLabel: String,
+    onSecondaryAction: () -> Unit,
+    onForgetPair: (() -> Unit)? = null
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -312,6 +316,13 @@ fun EmptyHomeCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (!trustedPairLabel.isNullOrBlank()) {
+                Text(
+                    text = trustedPairLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (!projectPath.isNullOrBlank()) {
                 Text(
                     text = projectPath,
@@ -332,11 +343,19 @@ fun EmptyHomeCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onStartThread, modifier = Modifier.weight(1f)) {
-                    Text("New Chat")
+                Button(onClick = onPrimaryAction, modifier = Modifier.weight(1f)) {
+                    Text(primaryActionLabel)
                 }
-                OutlinedButton(onClick = onOpenSidebar, modifier = Modifier.weight(1f)) {
-                    Text("Sidebar")
+                OutlinedButton(onClick = onSecondaryAction, modifier = Modifier.weight(1f)) {
+                    Text(secondaryActionLabel)
+                }
+            }
+            if (onForgetPair != null) {
+                OutlinedButton(
+                    onClick = onForgetPair,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Forget Pair")
                 }
             }
         }

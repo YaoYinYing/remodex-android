@@ -27,6 +27,7 @@ fun WorkspaceSettingsScreen(
     selectedModel: String,
     availableModels: List<String>,
     currentProjectPath: String?,
+    trustedPairLabel: String?,
     notificationsEnabled: Boolean,
     fontStyle: AppFontStyle,
     toneMode: AppToneMode,
@@ -39,7 +40,8 @@ fun WorkspaceSettingsScreen(
     onLoggerLevelChanged: (LoggerLevel) -> Unit,
     onLoggerMaxLinesChanged: (Int) -> Unit,
     onSwitchModel: (String) -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    onForgetPair: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -84,12 +86,25 @@ fun WorkspaceSettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (!trustedPairLabel.isNullOrBlank()) {
+                    Text(
+                        text = trustedPairLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (!currentProjectPath.isNullOrBlank()) {
                     Text(
                         text = currentProjectPath,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                OutlinedButton(
+                    onClick = onForgetPair,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Forget Pair")
                 }
             }
         }
