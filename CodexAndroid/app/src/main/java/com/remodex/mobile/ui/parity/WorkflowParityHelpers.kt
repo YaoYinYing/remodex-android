@@ -150,14 +150,9 @@ sealed interface ComposerAutocompleteToken {
 
 val DefaultComposerCommands = listOf(
     ComposerCommand("/status", "Status", "Refresh thread/git/rate-limit status."),
-    ComposerCommand("/new", "New Chat", "Create a new thread in current project."),
-    ComposerCommand("/refresh", "Refresh", "Force workspace refresh."),
-    ComposerCommand("/resume", "Resume", "Resume the current thread."),
     ComposerCommand("/fork", "Fork", "Fork the current thread."),
-    ComposerCommand("/review", "Review", "Start review mode for the current thread."),
-    ComposerCommand("/subagents", "Subagents", "Insert subagent workflow command scaffold."),
-    ComposerCommand("/steer", "Steer", "Steer the active turn with additional guidance."),
-    ComposerCommand("/help", "Help", "Show command and mention hints.")
+    ComposerCommand("/review", "Review", "Run the reviewer on your local changes."),
+    ComposerCommand("/subagents", "Subagents", "Insert a canned prompt that asks Codex to delegate work.")
 )
 
 fun detectComposerAutocompleteToken(input: String): ComposerAutocompleteToken? {
@@ -210,12 +205,20 @@ fun applyComposerAutocompleteSelection(
     return (head + normalizedReplacement + spacer + tail).trimEnd() + " "
 }
 
-fun filterComposerCommands(query: String): List<ComposerCommand> {
+fun filterComposerCommands(
+    query: String,
+    includeFork: Boolean = true
+): List<ComposerCommand> {
+    val eligible = if (includeFork) {
+        DefaultComposerCommands
+    } else {
+        DefaultComposerCommands.filterNot { it.token == "/fork" }
+    }
     val normalizedQuery = query.trim().lowercase()
     if (normalizedQuery.isEmpty()) {
-        return DefaultComposerCommands
+        return eligible
     }
-    return DefaultComposerCommands.filter { command ->
+    return eligible.filter { command ->
         command.token.lowercase().contains(normalizedQuery)
             || command.title.lowercase().contains(normalizedQuery)
             || command.detail.lowercase().contains(normalizedQuery)

@@ -5,7 +5,7 @@ Every row must be verified before the iteration is considered complete.
 
 ## Gate Status
 
-- `TODO-01` to `TODO-20`: `DONE` (re-validated on 2026-03-28 after root-flow/settings parity pass)
+- `TODO-01` to `TODO-20`: `DONE` (re-validated on 2026-03-28 after slash/review/subagents parity pass)
 
 | TODO | Scope | Verification | Evidence |
 | --- | --- | --- | --- |
@@ -20,7 +20,7 @@ Every row must be verified before the iteration is considered complete.
 | TODO-09 | @files/$skills//commands | Instrumentation | Mention chips and autocomplete panels appear and resolve correctly |
 | TODO-10 | Git actions parity | Unit + live ADB | Status, branches, checkout, commit, pull, and push work in a repo-bound thread |
 | TODO-11 | Thread lifecycle parity | Unit + live ADB | Start, resume, fork, interrupt, archive, unarchive, and delete flows persist correctly |
-| TODO-12 | Task steering + plan/review | Unit + instrumentation | Plan/review/steer controls route into the same workflow semantics as iOS |
+| TODO-12 | Task steering + plan/review | Unit + instrumentation | `/steer` and `/review` route with iOS-style composer semantics (review target suggestion tray, armed review chip, send-time `review/start` target payload) |
 | TODO-13 | Voice + media parity | Instrumentation + live ADB | Camera/gallery uploads and voice transcription complete end-to-end |
 | TODO-14 | Notifications parity | Unit + live ADB | Status, permission, rate-limit, git, and CI/CD alerts are emitted |
 | TODO-15 | Settings parity | Instrumentation | Font, tone, runtime defaults, and connection controls match iOS via app-level settings route |

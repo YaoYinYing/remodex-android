@@ -74,6 +74,11 @@ data class TurnImageAttachment(
     val label: String? = null
 )
 
+enum class ReviewTarget {
+    UNCOMMITTED_CHANGES,
+    BASE_BRANCH
+}
+
 class CodexService(
     private val secureTransport: CodexSecureTransport = CodexSecureTransport(),
     private val parser: RpcTransportParser = RpcTransportParser(),
@@ -1486,29 +1491,110 @@ class CodexService(
         return forkedThreadId
     }
 
-    suspend fun reviewStart(threadId: String? = null): Boolean {
+    suspend fun reviewStart(
+        threadId: String? = null,
+        target: ReviewTarget? = null,
+        baseBranch: String? = null
+    ): Boolean {
         ensureConnected()
-        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: _selectedThreadId.value
-        val params = normalizedThreadId?.let {
-            JsonObject(mapOf("threadId" to JsonPrimitive(it)))
-        } ?: JsonObject(emptyMap())
-        val responsePair = requestFirstAvailable(
-            methods = listOf("review/start"),
-            params = params
-        ) ?: run {
-            setStatus("Review start unavailable from relay.")
+        if (target == ReviewTarget.BASE_BRANCH && baseBranch?.trim().isNullOrEmpty()) {
+            setStatus("Choose a base branch before starting review.")
             return false
         }
-        val reviewId = (responsePair.second.result as? JsonObject)?.string("reviewId", "review_id")
-        setStatus(
-            if (!reviewId.isNullOrBlank()) {
-                "Started review $reviewId via $activeTransportLabel."
-            } else {
-                "Started review via $activeTransportLabel."
-            },
-            notify = true
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: _selectedThreadId.value
+        val primaryParams = buildReviewStartParams(
+            threadId = normalizedThreadId,
+            target = target,
+            baseBranch = baseBranch
         )
-        return true
+        val attemptParams = buildList {
+            add(primaryParams)
+            val legacyParams = buildReviewStartParams(
+                threadId = normalizedThreadId,
+                target = null,
+                baseBranch = null
+            )
+            if (legacyParams.toString() != primaryParams.toString()) {
+                add(legacyParams)
+            }
+        }
+        for ((index, params) in attemptParams.withIndex()) {
+            val responsePair = try {
+                requestFirstAvailable(
+                    methods = listOf("review/start"),
+                    params = params
+                )
+            } catch (error: IllegalStateException) {
+                val hasFallback = index < attemptParams.lastIndex
+                if (hasFallback && shouldFallbackReviewStartParams(error)) {
+                    AppLogger.info(LOG_TAG, "review/start params rejected, retrying compatibility payload.")
+                    continue
+                }
+                throw error
+            } ?: continue
+            val reviewId = (responsePair.second.result as? JsonObject)?.string("reviewId", "review_id")
+            setStatus(
+                if (!reviewId.isNullOrBlank()) {
+                    "Started review $reviewId via $activeTransportLabel."
+                } else {
+                    "Started review via $activeTransportLabel."
+                },
+                notify = true
+            )
+            return true
+        }
+        setStatus("Review start unavailable from relay.")
+        return false
+    }
+
+    private fun buildReviewStartParams(
+        threadId: String?,
+        target: ReviewTarget?,
+        baseBranch: String?
+    ): JsonObject {
+        val payload = mutableMapOf<String, kotlinx.serialization.json.JsonElement>()
+        val normalizedThreadId = threadId?.trim().orEmpty()
+        if (normalizedThreadId.isNotEmpty()) {
+            payload["threadId"] = JsonPrimitive(normalizedThreadId)
+        }
+        val targetObject = when (target) {
+            ReviewTarget.UNCOMMITTED_CHANGES -> JsonObject(
+                mapOf(
+                    "type" to JsonPrimitive("uncommittedChanges")
+                )
+            )
+
+            ReviewTarget.BASE_BRANCH -> {
+                val normalizedBaseBranch = baseBranch?.trim().orEmpty()
+                if (normalizedBaseBranch.isEmpty()) {
+                    null
+                } else {
+                    JsonObject(
+                        mapOf(
+                            "type" to JsonPrimitive("baseBranch"),
+                            "branch" to JsonPrimitive(normalizedBaseBranch)
+                        )
+                    )
+                }
+            }
+
+            null -> null
+        }
+        if (targetObject != null) {
+            payload["delivery"] = JsonPrimitive("inline")
+            payload["target"] = targetObject
+        }
+        return JsonObject(payload)
+    }
+
+    private fun shouldFallbackReviewStartParams(error: IllegalStateException): Boolean {
+        val message = error.message?.lowercase().orEmpty()
+        return message.contains("(-32600)")
+            || message.contains("(-32602)")
+            || message.contains("invalid params")
+            || message.contains("invalid type")
+            || message.contains("missing field")
+            || message.contains("unknown field")
     }
 
     suspend fun interruptActiveTurn() {

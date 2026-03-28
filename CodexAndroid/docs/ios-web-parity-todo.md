@@ -13,7 +13,7 @@ Completion rule for this iteration: every item below must be `DONE`.
 | IW-03 | Keep paywall as silent dev gate (no public pricing) while mirroring iOS feature hierarchy cards. | `SubscriptionGateView.swift`, user constraint | DONE |
 | IW-04 | Align paywall feature copy to website claims (live control, git, secure pairing, command/mention workflow). | website interface/features section | DONE |
 | IW-05 | Bring empty-home visual shell closer to iOS by adding original app logo + connection status capsule treatment. | `HomeEmptyStateView.swift` | DONE |
-| IW-06 | Add slash-command parity for `/review` and `/subagents` from website claim coverage. | website `@files, $skills, /commands` | DONE |
+| IW-06 | Complete slash-command parity for `/review` and `/subagents` (inline review-target selection + armed review chip; subagents armed chip + iOS canned prompt payload). | website `@files, $skills, /commands` + iOS `TurnComposerCommandState.swift` | DONE |
 | IW-07 | Add active-turn steering command path (`/steer`) in composer flow. | website task steering claim | DONE |
 | IW-08 | Update Android instrumentation expectations to match the new onboarding/pairing UI wording and current `WorkspaceScreen` API. | Android parity test suite | DONE |
 | IW-09 | Keep local relay living test green after parity updates. | local-first runbook + ADB validation | DONE |

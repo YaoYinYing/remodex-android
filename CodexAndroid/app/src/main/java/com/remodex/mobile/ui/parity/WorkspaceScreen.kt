@@ -62,6 +62,7 @@ import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.FileAutocompleteMatch
 import com.remodex.mobile.service.PendingPermissionRequest
+import com.remodex.mobile.service.ReviewTarget
 import com.remodex.mobile.service.SkillSuggestion
 import com.remodex.mobile.service.TurnImageAttachment
 import com.remodex.mobile.service.logging.LoggerLevel
@@ -73,6 +74,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val MAX_COMPOSER_ATTACHMENTS = 4
+private const val SUBAGENTS_CANNED_PROMPT =
+    "Run subagents for different tasks. Delegate distinct work in parallel when helpful and then synthesize the results."
 
 @Composable
 fun WorkspaceScreen(
@@ -127,13 +130,19 @@ fun WorkspaceScreen(
     var fileSuggestions by remember { mutableStateOf<List<FileAutocompleteMatch>>(emptyList()) }
     var skillSuggestions by remember { mutableStateOf<List<SkillSuggestion>>(emptyList()) }
     val activeComposerToken = remember(composerInput) { detectComposerAutocompleteToken(composerInput) }
-    val commandSuggestions = remember(activeComposerToken) {
+    val commandSuggestions = remember(activeComposerToken, selectedThreadId) {
         when (val token = activeComposerToken) {
-            is ComposerAutocompleteToken.Command -> filterComposerCommands(token.query)
+            is ComposerAutocompleteToken.Command -> filterComposerCommands(
+                query = token.query,
+                includeFork = !selectedThreadId.isNullOrBlank()
+            )
             else -> emptyList()
         }
     }
     var queuePaused by rememberSaveable { mutableStateOf(false) }
+    var subagentsArmed by rememberSaveable { mutableStateOf(false) }
+    var armedReviewTarget by rememberSaveable { mutableStateOf<ReviewTarget?>(null) }
+    var showReviewTargetSuggestions by rememberSaveable { mutableStateOf(false) }
     val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
     var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
@@ -244,13 +253,24 @@ fun WorkspaceScreen(
         val nextDraft = queuedDrafts.firstOrNull() ?: return@LaunchedEffect
         runCatching {
             service.sendTurnStart(
-                inputText = nextDraft.text,
+                inputText = buildComposerPayloadText(nextDraft.text, nextDraft.subagentsArmed),
                 attachments = nextDraft.attachments,
                 skillMentions = nextDraft.skillMentions,
                 fileMentions = nextDraft.fileMentions
             )
         }.onSuccess {
             queuedDrafts.removeAt(0)
+        }
+    }
+
+    LaunchedEffect(composerInput, mentionedFiles.size, mentionedSkills.size, mediaAttachments.size, subagentsArmed) {
+        val hasConflictingDraftContent = composerInput.trim().isNotEmpty()
+            || mentionedFiles.isNotEmpty()
+            || mentionedSkills.isNotEmpty()
+            || mediaAttachments.isNotEmpty()
+            || subagentsArmed
+        if (armedReviewTarget != null && hasConflictingDraftContent) {
+            armedReviewTarget = null
         }
     }
 
@@ -477,6 +497,9 @@ fun WorkspaceScreen(
                             onVoiceDraftTextChange = { voiceDraftText = it },
                             mediaAttachments = mediaAttachments,
                             attachmentHint = attachmentHint,
+                            subagentsArmed = subagentsArmed,
+                            armedReviewTarget = armedReviewTarget,
+                            showReviewTargetSuggestions = showReviewTargetSuggestions,
                             mentionedFiles = mentionedFiles,
                             mentionedSkills = mentionedSkills,
                             activeComposerToken = activeComposerToken,
@@ -509,6 +532,8 @@ fun WorkspaceScreen(
                                     attachmentHint = null
                                 }
                             },
+                            onClearSubagentsArmed = { subagentsArmed = false },
+                            onClearReviewTarget = { armedReviewTarget = null },
                             onRemoveMentionedFile = { mention -> mentionedFiles.remove(mention) },
                             onRemoveMentionedSkill = { skill -> mentionedSkills.remove(skill) },
                             onSelectFileSuggestion = { token, match ->
@@ -538,6 +563,7 @@ fun WorkspaceScreen(
                             onSelectCommandSuggestion = { command ->
                                 when (command.token) {
                                     "/status" -> {
+                                        showReviewTargetSuggestions = false
                                         scope.launch {
                                             runCatching { service.forceRefreshWorkspace() }
                                             runCatching { service.refreshThreads(includeTimeline = false) }
@@ -547,38 +573,45 @@ fun WorkspaceScreen(
                                     }
 
                                     "/new" -> {
+                                        showReviewTargetSuggestions = false
                                         scope.launch {
                                             runCatching { service.startThread(preferredProjectPath = normalizedProjectPath) }
                                         }
                                     }
 
                                     "/refresh" -> {
+                                        showReviewTargetSuggestions = false
                                         scope.launch { runCatching { service.forceRefreshWorkspace() } }
                                     }
 
                                     "/resume" -> {
+                                        showReviewTargetSuggestions = false
                                         scope.launch {
                                             runCatching { service.threadResume(selectedThreadId) }
                                         }
                                     }
 
                                     "/fork" -> {
+                                        showReviewTargetSuggestions = false
                                         scope.launch {
                                             runCatching { service.threadFork(selectedThreadId) }
                                         }
                                     }
 
                                     "/review" -> {
-                                        scope.launch {
-                                            runCatching { service.reviewStart(selectedThreadId) }
-                                        }
+                                        onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
+                                        showReviewTargetSuggestions = true
                                     }
 
                                     "/subagents" -> {
-                                        onComposerInputChange("/subagents ")
+                                        showReviewTargetSuggestions = false
+                                        armedReviewTarget = null
+                                        onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
+                                        subagentsArmed = true
                                     }
 
                                     "/steer" -> {
+                                        showReviewTargetSuggestions = false
                                         val steerInput = composerInput
                                             .removePrefix("/steer")
                                             .trim()
@@ -593,6 +626,7 @@ fun WorkspaceScreen(
                                     }
 
                                     else -> {
+                                        showReviewTargetSuggestions = false
                                         onComposerInputChange(
                                             "Help: use @files, \$skills, /status, /new, /refresh, /resume, /fork, /review, /subagents, /steer."
                                         )
@@ -604,6 +638,8 @@ fun WorkspaceScreen(
                             onRestoreLatest = {
                                 val latest = queuedDrafts.removeLastOrNull() ?: return@ComposerDock
                                 onComposerInputChange(latest.text)
+                                subagentsArmed = latest.subagentsArmed
+                                armedReviewTarget = null
                                 mentionedFiles.clear()
                                 mentionedFiles.addAll(latest.fileMentions)
                                 mentionedSkills.clear()
@@ -612,15 +648,53 @@ fun WorkspaceScreen(
                                 mediaAttachments.addAll(latest.attachments)
                             },
                             onClearQueue = { queuedDrafts.clear() },
+                            onSelectReviewTargetSuggestion = { target ->
+                                val hasConflictingDraftContent = composerInput.trim().isNotEmpty()
+                                    || mentionedFiles.isNotEmpty()
+                                    || mentionedSkills.isNotEmpty()
+                                    || mediaAttachments.isNotEmpty()
+                                    || subagentsArmed
+                                if (hasConflictingDraftContent) {
+                                    attachmentHint = "Review mode requires an empty draft with no mentions, attachments, or /subagents."
+                                    showReviewTargetSuggestions = false
+                                } else {
+                                    attachmentHint = null
+                                    armedReviewTarget = target
+                                    showReviewTargetSuggestions = false
+                                    onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
+                                }
+                            },
+                            onDismissReviewTargetSuggestions = { showReviewTargetSuggestions = false },
                             onSend = {
-                                val trimmed = composerInput.trim()
-                                if (trimmed.isEmpty() && mediaAttachments.isEmpty()) {
+                                val selectedReviewTarget = armedReviewTarget
+                                if (selectedReviewTarget != null) {
+                                    scope.launch {
+                                        runCatching {
+                                            service.reviewStart(
+                                                threadId = selectedThreadId,
+                                                target = selectedReviewTarget,
+                                                baseBranch = checkoutBranch.trim().takeIf { it.isNotEmpty() }
+                                            )
+                                        }.onSuccess {
+                                            armedReviewTarget = null
+                                            showReviewTargetSuggestions = false
+                                            onComposerInputChange("")
+                                            subagentsArmed = false
+                                            attachmentHint = null
+                                        }
+                                    }
                                     return@ComposerDock
                                 }
+                                val trimmed = composerInput.trim()
+                                if (trimmed.isEmpty() && mediaAttachments.isEmpty() && !subagentsArmed) {
+                                    return@ComposerDock
+                                }
+                                val payloadText = buildComposerPayloadText(trimmed, subagentsArmed)
                                 if (selectedThreadId != null && service.isThreadRunning(selectedThreadId)) {
                                     queuedDrafts.add(
                                         QueuedComposerDraft(
                                             text = trimmed,
+                                            subagentsArmed = subagentsArmed,
                                             fileMentions = mentionedFiles.toList(),
                                             skillMentions = mentionedSkills.toList(),
                                             attachments = mediaAttachments.toList()
@@ -631,13 +705,15 @@ fun WorkspaceScreen(
                                     voiceDraftText = ""
                                     mentionedFiles.clear()
                                     mentionedSkills.clear()
+                                    subagentsArmed = false
+                                    showReviewTargetSuggestions = false
                                     attachmentHint = null
                                     return@ComposerDock
                                 }
                                 scope.launch {
                                     runCatching {
                                         service.sendTurnStart(
-                                            inputText = trimmed,
+                                            inputText = payloadText,
                                             attachments = mediaAttachments.toList(),
                                             skillMentions = mentionedSkills.toList(),
                                             fileMentions = mentionedFiles.toList()
@@ -647,12 +723,15 @@ fun WorkspaceScreen(
                                         mentionedFiles.clear()
                                         mentionedSkills.clear()
                                         mediaAttachments.clear()
+                                        subagentsArmed = false
+                                        showReviewTargetSuggestions = false
                                         attachmentHint = null
                                         voiceDraftText = ""
                                     }
                                 }
                             },
                             onStop = {
+                                showReviewTargetSuggestions = false
                                 scope.launch { runCatching { service.interruptActiveTurn() } }
                             }
                         )
@@ -661,6 +740,7 @@ fun WorkspaceScreen(
             }
         }
     }
+
 }
 
 @Composable
@@ -903,6 +983,9 @@ private fun ComposerDock(
     onVoiceDraftTextChange: (String) -> Unit,
     mediaAttachments: List<TurnImageAttachment>,
     attachmentHint: String?,
+    subagentsArmed: Boolean,
+    armedReviewTarget: ReviewTarget?,
+    showReviewTargetSuggestions: Boolean,
     mentionedFiles: List<String>,
     mentionedSkills: List<SkillSuggestion>,
     activeComposerToken: ComposerAutocompleteToken?,
@@ -918,6 +1001,8 @@ private fun ComposerDock(
     onUseVoiceDraft: () -> Unit,
     onSwitchModel: (String) -> Unit,
     onRemoveAttachment: (TurnImageAttachment) -> Unit,
+    onClearSubagentsArmed: () -> Unit,
+    onClearReviewTarget: () -> Unit,
     onRemoveMentionedFile: (String) -> Unit,
     onRemoveMentionedSkill: (SkillSuggestion) -> Unit,
     onSelectFileSuggestion: (ComposerAutocompleteToken.File, FileAutocompleteMatch) -> Unit,
@@ -925,6 +1010,8 @@ private fun ComposerDock(
     onSelectCommandSuggestion: (ComposerCommand) -> Unit,
     onRestoreLatest: () -> Unit,
     onClearQueue: () -> Unit,
+    onSelectReviewTargetSuggestion: (ReviewTarget) -> Unit,
+    onDismissReviewTargetSuggestions: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -962,7 +1049,13 @@ private fun ComposerDock(
                 }
             }
 
-            if (mediaAttachments.isNotEmpty() || mentionedFiles.isNotEmpty() || mentionedSkills.isNotEmpty()) {
+            if (
+                mediaAttachments.isNotEmpty()
+                || mentionedFiles.isNotEmpty()
+                || mentionedSkills.isNotEmpty()
+                || subagentsArmed
+                || armedReviewTarget != null
+            ) {
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -988,6 +1081,20 @@ private fun ComposerDock(
                             onClick = { onRemoveMentionedSkill(skill) }
                         )
                     }
+                    if (subagentsArmed) {
+                        SmallChip(
+                            text = "/subagents",
+                            selected = true,
+                            onClick = onClearSubagentsArmed
+                        )
+                    }
+                    armedReviewTarget?.let { target ->
+                        SmallChip(
+                            text = reviewTargetChipLabel(target),
+                            selected = true,
+                            onClick = onClearReviewTarget
+                        )
+                    }
                 }
             }
 
@@ -999,35 +1106,48 @@ private fun ComposerDock(
                 )
             }
 
-            when (val token = activeComposerToken) {
-                is ComposerAutocompleteToken.File -> {
-                    if (fileSuggestions.isNotEmpty()) {
-                        SuggestionTray(
-                            labels = fileSuggestions.map { it.fileName },
-                            onSelected = { index -> onSelectFileSuggestion(token, fileSuggestions[index]) }
-                        )
+            if (showReviewTargetSuggestions) {
+                SuggestionTray(
+                    labels = listOf("Uncommitted changes", "Base branch", "Cancel"),
+                    onSelected = { index ->
+                        when (index) {
+                            0 -> onSelectReviewTargetSuggestion(ReviewTarget.UNCOMMITTED_CHANGES)
+                            1 -> onSelectReviewTargetSuggestion(ReviewTarget.BASE_BRANCH)
+                            else -> onDismissReviewTargetSuggestions()
+                        }
                     }
-                }
-
-                is ComposerAutocompleteToken.Skill -> {
-                    if (skillSuggestions.isNotEmpty()) {
-                        SuggestionTray(
-                            labels = skillSuggestions.map { "\$${it.name}" },
-                            onSelected = { index -> onSelectSkillSuggestion(token, skillSuggestions[index]) }
-                        )
+                )
+            } else {
+                when (val token = activeComposerToken) {
+                    is ComposerAutocompleteToken.File -> {
+                        if (fileSuggestions.isNotEmpty()) {
+                            SuggestionTray(
+                                labels = fileSuggestions.map { it.fileName },
+                                onSelected = { index -> onSelectFileSuggestion(token, fileSuggestions[index]) }
+                            )
+                        }
                     }
-                }
 
-                is ComposerAutocompleteToken.Command -> {
-                    if (commandSuggestions.isNotEmpty()) {
-                        SuggestionTray(
-                            labels = commandSuggestions.map { it.token },
-                            onSelected = { index -> onSelectCommandSuggestion(commandSuggestions[index]) }
-                        )
+                    is ComposerAutocompleteToken.Skill -> {
+                        if (skillSuggestions.isNotEmpty()) {
+                            SuggestionTray(
+                                labels = skillSuggestions.map { "\$${it.name}" },
+                                onSelected = { index -> onSelectSkillSuggestion(token, skillSuggestions[index]) }
+                            )
+                        }
                     }
-                }
 
-                null -> Unit
+                    is ComposerAutocompleteToken.Command -> {
+                        if (commandSuggestions.isNotEmpty()) {
+                            SuggestionTray(
+                                labels = commandSuggestions.map { it.token },
+                                onSelected = { index -> onSelectCommandSuggestion(commandSuggestions[index]) }
+                            )
+                        }
+                    }
+
+                    null -> Unit
+                }
             }
 
             Surface(
@@ -1082,7 +1202,12 @@ private fun ComposerDock(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(
                     onClick = onSend,
-                    enabled = (composerInput.isNotBlank() || mediaAttachments.isNotEmpty()) && selectedThreadId != null,
+                    enabled = (
+                        composerInput.isNotBlank()
+                            || mediaAttachments.isNotEmpty()
+                            || subagentsArmed
+                            || armedReviewTarget != null
+                        ) && selectedThreadId != null,
                     modifier = Modifier.weight(1f)
                 ) {
                     Text(if (isRunning) "Queue" else "Send")
@@ -1118,10 +1243,41 @@ private fun SuggestionTray(
 
 private data class QueuedComposerDraft(
     val text: String,
+    val subagentsArmed: Boolean = false,
     val fileMentions: List<String>,
     val skillMentions: List<SkillSuggestion>,
     val attachments: List<TurnImageAttachment>
 )
+
+private fun reviewTargetChipLabel(target: ReviewTarget): String {
+    return when (target) {
+        ReviewTarget.UNCOMMITTED_CHANGES -> "Review: Uncommitted"
+        ReviewTarget.BASE_BRANCH -> "Review: Base branch"
+    }
+}
+
+private fun stripTrailingSlashCommandToken(input: String): String {
+    val token = detectComposerAutocompleteToken(input) as? ComposerAutocompleteToken.Command ?: return input
+    if (token.endIndexExclusive != input.length) {
+        return input
+    }
+    return input.substring(0, token.startIndex).trimEnd()
+}
+
+private fun buildComposerPayloadText(
+    text: String,
+    subagentsArmed: Boolean
+): String {
+    val normalized = text.trim()
+    if (!subagentsArmed) {
+        return normalized
+    }
+    return if (normalized.isEmpty()) {
+        SUBAGENTS_CANNED_PROMPT
+    } else {
+        "$SUBAGENTS_CANNED_PROMPT\n\n$normalized"
+    }
+}
 
 private fun Bitmap.toJpegDataUrl(quality: Int = 85): String {
     val output = ByteArrayOutputStream()
