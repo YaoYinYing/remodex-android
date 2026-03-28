@@ -188,6 +188,17 @@ fun WorkspaceScreen(
             }
         }
     }
+    val clearComposerAfterDispatch: () -> Unit = {
+        onComposerInputChange("")
+        mediaAttachments.clear()
+        voiceDraftText = ""
+        mentionedFiles.clear()
+        mentionedSkills.clear()
+        subagentsArmed = false
+        showReviewTargetSuggestions = false
+        showForkDestinationSuggestions = false
+        attachmentHint = null
+    }
 
     LaunchedEffect(isConnected, autoRefreshEnabled) {
         if (!isConnected || !autoRefreshEnabled) {
@@ -249,7 +260,16 @@ fun WorkspaceScreen(
 
     LaunchedEffect(selectedThreadId, timeline.size, queuedDrafts.size, queuePaused) {
         val threadId = selectedThreadId
-        if (threadId.isNullOrBlank() || queuedDrafts.isEmpty() || queuePaused || service.isThreadRunning(threadId)) {
+        if (threadId.isNullOrBlank() || queuedDrafts.isEmpty() || queuePaused) {
+            return@LaunchedEffect
+        }
+        val threadBusy = if (service.isThreadRunning(threadId)) {
+            runCatching { service.reconcileThreadRunningState(threadId) }
+                .getOrElse { true }
+        } else {
+            false
+        }
+        if (threadBusy) {
             return@LaunchedEffect
         }
         val nextDraft = queuedDrafts.firstOrNull() ?: return@LaunchedEffect
@@ -262,6 +282,10 @@ fun WorkspaceScreen(
             )
         }.onSuccess {
             queuedDrafts.removeAt(0)
+            attachmentHint = null
+        }.onFailure { error ->
+            queuePaused = true
+            attachmentHint = "Queue paused: ${error.message ?: "Failed to send queued draft."}"
         }
     }
 
@@ -685,6 +709,9 @@ fun WorkspaceScreen(
                                         service.turnSteer(buildComposerPayloadText(draft.text, draft.subagentsArmed))
                                     }.onSuccess {
                                         queuedDrafts.removeAll { it.id == draftId }
+                                        attachmentHint = null
+                                    }.onFailure {
+                                        attachmentHint = it.message ?: "Failed to steer queued draft."
                                     }.also {
                                         steeringQueuedDraftId = null
                                     }
@@ -759,70 +786,65 @@ fun WorkspaceScreen(
                             },
                             onSend = {
                                 val selectedReviewTarget = armedReviewTarget
-                                if (selectedReviewTarget != null) {
-                                    scope.launch {
+                                val trimmed = composerInput.trim()
+                                if (selectedReviewTarget == null && trimmed.isEmpty() && mediaAttachments.isEmpty() && !subagentsArmed) {
+                                    return@ComposerDock
+                                }
+                                scope.launch {
+                                    val activeThreadId = selectedThreadId
+                                    val threadBusy = if (!activeThreadId.isNullOrBlank() && service.isThreadRunning(activeThreadId)) {
+                                        runCatching { service.reconcileThreadRunningState(activeThreadId) }
+                                            .getOrElse { true }
+                                    } else {
+                                        false
+                                    }
+
+                                    if (selectedReviewTarget != null) {
+                                        if (threadBusy) {
+                                            attachmentHint = "Wait for the current response to finish before starting a review."
+                                            return@launch
+                                        }
                                         runCatching {
                                             service.reviewStart(
-                                                threadId = selectedThreadId,
+                                                threadId = activeThreadId,
                                                 target = selectedReviewTarget,
                                                 baseBranch = checkoutBranch.trim().takeIf { it.isNotEmpty() }
                                             )
                                         }.onSuccess {
                                             armedReviewTarget = null
-                                            showReviewTargetSuggestions = false
-                                            showForkDestinationSuggestions = false
-                                            onComposerInputChange("")
-                                            subagentsArmed = false
-                                            attachmentHint = null
+                                            clearComposerAfterDispatch()
+                                        }.onFailure {
+                                            attachmentHint = it.message ?: "Failed to start review."
                                         }
+                                        return@launch
                                     }
-                                    return@ComposerDock
-                                }
-                                val trimmed = composerInput.trim()
-                                if (trimmed.isEmpty() && mediaAttachments.isEmpty() && !subagentsArmed) {
-                                    return@ComposerDock
-                                }
-                                val payloadText = buildComposerPayloadText(trimmed, subagentsArmed)
-                                if (selectedThreadId != null && service.isThreadRunning(selectedThreadId)) {
-                                    queuedDrafts.add(
-                                        QueuedComposerDraft(
-                                            id = "draft-${System.currentTimeMillis()}-${queuedDrafts.size}",
-                                            text = trimmed,
-                                            subagentsArmed = subagentsArmed,
-                                            fileMentions = mentionedFiles.toList(),
-                                            skillMentions = mentionedSkills.toList(),
-                                            attachments = mediaAttachments.toList()
+
+                                    if (threadBusy) {
+                                        queuedDrafts.add(
+                                            QueuedComposerDraft(
+                                                id = "draft-${System.currentTimeMillis()}-${queuedDrafts.size}",
+                                                text = trimmed,
+                                                subagentsArmed = subagentsArmed,
+                                                fileMentions = mentionedFiles.toList(),
+                                                skillMentions = mentionedSkills.toList(),
+                                                attachments = mediaAttachments.toList()
+                                            )
                                         )
-                                    )
-                                    onComposerInputChange("")
-                                    mediaAttachments.clear()
-                                    voiceDraftText = ""
-                                    mentionedFiles.clear()
-                                    mentionedSkills.clear()
-                                    subagentsArmed = false
-                                    showReviewTargetSuggestions = false
-                                    showForkDestinationSuggestions = false
-                                    attachmentHint = null
-                                    return@ComposerDock
-                                }
-                                scope.launch {
+                                        clearComposerAfterDispatch()
+                                        return@launch
+                                    }
+
                                     runCatching {
                                         service.sendTurnStart(
-                                            inputText = payloadText,
+                                            inputText = buildComposerPayloadText(trimmed, subagentsArmed),
                                             attachments = mediaAttachments.toList(),
                                             skillMentions = mentionedSkills.toList(),
                                             fileMentions = mentionedFiles.toList()
                                         )
                                     }.onSuccess {
-                                        onComposerInputChange("")
-                                        mentionedFiles.clear()
-                                        mentionedSkills.clear()
-                                        mediaAttachments.clear()
-                                        subagentsArmed = false
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        attachmentHint = null
-                                        voiceDraftText = ""
+                                        clearComposerAfterDispatch()
+                                    }.onFailure {
+                                        attachmentHint = it.message ?: "Failed to send message."
                                     }
                                 }
                             },

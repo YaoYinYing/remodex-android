@@ -1734,6 +1734,24 @@ class CodexService(
         setStatus("Interrupted turn $resolvedTurnId on $threadId via $activeTransportLabel.", notify = true)
     }
 
+    suspend fun reconcileThreadRunningState(threadId: String?): Boolean {
+        val normalizedThreadId = threadId?.trim().orEmpty()
+        if (normalizedThreadId.isEmpty()) {
+            return false
+        }
+        val cachedTurnId = activeTurnIdByThread[normalizedThreadId]
+        if (cachedTurnId.isNullOrBlank()) {
+            return false
+        }
+        val resolvedTurnId = resolveInterruptTurnId(normalizedThreadId)
+        if (resolvedTurnId.isNullOrBlank()) {
+            activeTurnIdByThread.remove(normalizedThreadId)
+            return false
+        }
+        activeTurnIdByThread[normalizedThreadId] = resolvedTurnId
+        return true
+    }
+
     fun isThreadRunning(threadId: String?): Boolean {
         val normalized = threadId?.trim().orEmpty()
         if (normalized.isEmpty()) {
