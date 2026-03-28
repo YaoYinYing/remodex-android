@@ -43,7 +43,8 @@ fun HeroCard(
     stateLabel: String,
     status: String,
     indicatorColor: Color,
-    subtitle: String
+    subtitle: String,
+    onTap: (() -> Unit)? = null
 ) {
     val heroGradient = Brush.linearGradient(
         colors = listOf(
@@ -53,7 +54,15 @@ fun HeroCard(
     )
 
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .let { base ->
+                if (onTap != null) {
+                    base.clickable(onClick = onTap)
+                } else {
+                    base
+                }
+            },
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = Color.Transparent)
     ) {

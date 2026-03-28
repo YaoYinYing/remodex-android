@@ -47,6 +47,7 @@ import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.PendingPermissionRequest
 import com.remodex.mobile.service.ServiceEvent
 import com.remodex.mobile.service.push.PushRegistrationPayload
+import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
 import kotlinx.coroutines.delay
@@ -88,7 +89,12 @@ fun WorkspaceScreen(
     fontStyle: AppFontStyle,
     toneMode: AppToneMode,
     onFontStyleChanged: (AppFontStyle) -> Unit,
-    onToneModeChanged: (AppToneMode) -> Unit
+    onToneModeChanged: (AppToneMode) -> Unit,
+    loggerLevel: LoggerLevel,
+    loggerMaxLines: Int,
+    onLoggerLevelChanged: (LoggerLevel) -> Unit,
+    onLoggerMaxLinesChanged: (Int) -> Unit,
+    onHeaderTap: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -146,6 +152,10 @@ fun WorkspaceScreen(
                             runCatching { service.forceRefreshWorkspace() }
                         }
                     },
+                    loggerLevel = loggerLevel,
+                    loggerMaxLines = loggerMaxLines,
+                    onLoggerLevelChanged = onLoggerLevelChanged,
+                    onLoggerMaxLinesChanged = onLoggerMaxLinesChanged,
                     onGitPull = {
                         scope.launch {
                             runCatching { service.gitPull() }
@@ -224,7 +234,8 @@ fun WorkspaceScreen(
                             stateLabel = connectionStateLabel(connectionState),
                             status = status,
                             indicatorColor = if (isConnected) Color(0xFF2DB17D) else Color(0xFFD9534F),
-                            subtitle = "iOS-parity workspace shell with side-slide controls"
+                            subtitle = "iOS-parity workspace shell with side-slide controls",
+                            onTap = onHeaderTap
                         )
                     }
 

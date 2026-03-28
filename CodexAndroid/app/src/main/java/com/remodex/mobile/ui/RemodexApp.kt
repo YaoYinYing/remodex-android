@@ -18,6 +18,9 @@ import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.PairingPayload
 import com.remodex.mobile.service.ServiceEvent
+import com.remodex.mobile.service.logging.AppLogger
+import com.remodex.mobile.service.logging.LoggerLevel
+import com.remodex.mobile.ui.parity.LoggerScreen
 import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
 import com.remodex.mobile.ui.parity.PaywallScreen
@@ -35,6 +38,10 @@ private const val PREF_HAS_SEEN_ONBOARDING = "hasSeenOnboarding"
 private const val PREF_HAS_PRO_ACCESS = "hasProAccess"
 private const val PREF_FONT_STYLE = "fontStyle"
 private const val PREF_TONE_MODE = "toneMode"
+private const val PREF_LOGGER_LEVEL = "loggerLevel"
+private const val PREF_LOGGER_MAX_LINES = "loggerMaxLines"
+private const val LOGGER_UNLOCK_TAP_COUNT = 7
+private const val LOGGER_UNLOCK_WINDOW_MS = 4_000L
 
 private enum class AppGate {
     ONBOARDING,
@@ -79,9 +86,20 @@ fun RemodexApp(
     var toneModeRaw by rememberSaveable {
         mutableStateOf(prefs.getString(PREF_TONE_MODE, AppToneMode.SYSTEM.name) ?: AppToneMode.SYSTEM.name)
     }
+    var loggerLevelRaw by rememberSaveable {
+        mutableStateOf(prefs.getString(PREF_LOGGER_LEVEL, LoggerLevel.INFO.name) ?: LoggerLevel.INFO.name)
+    }
+    var loggerMaxLines by rememberSaveable {
+        mutableStateOf(prefs.getInt(PREF_LOGGER_MAX_LINES, 3_000).coerceIn(200, 20_000))
+    }
+    var showLoggerView by rememberSaveable { mutableStateOf(false) }
+    val headerTapTimes = remember { ArrayDeque<Long>() }
 
     val fontStyle = AppFontStyle.fromStorage(fontStyleRaw)
     val toneMode = runCatching { AppToneMode.valueOf(toneModeRaw) }.getOrDefault(AppToneMode.SYSTEM)
+    val loggerLevel = LoggerLevel.fromStorage(loggerLevelRaw)
+    val loggerEntries by AppLogger.entries.collectAsState()
+    val loggerSettings by AppLogger.settings.collectAsState()
 
     var relayUrl by rememberSaveable { mutableStateOf("ws://127.0.0.1:8765/relay") }
     var sessionId by rememberSaveable { mutableStateOf("session-demo-android") }
@@ -119,13 +137,32 @@ fun RemodexApp(
         }
     }
 
-    LaunchedEffect(hasSeenOnboarding, hasProAccess, fontStyleRaw, toneModeRaw) {
+    LaunchedEffect(hasSeenOnboarding, hasProAccess, fontStyleRaw, toneModeRaw, loggerLevelRaw, loggerMaxLines) {
         prefs.edit()
             .putBoolean(PREF_HAS_SEEN_ONBOARDING, hasSeenOnboarding)
             .putBoolean(PREF_HAS_PRO_ACCESS, hasProAccess)
             .putString(PREF_FONT_STYLE, fontStyleRaw)
             .putString(PREF_TONE_MODE, toneModeRaw)
+            .putString(PREF_LOGGER_LEVEL, loggerLevelRaw)
+            .putInt(PREF_LOGGER_MAX_LINES, loggerMaxLines)
             .apply()
+    }
+
+    LaunchedEffect(loggerLevel, loggerMaxLines) {
+        AppLogger.configure(level = loggerLevel, maxLines = loggerMaxLines)
+    }
+
+    val onHeaderTap: () -> Unit = {
+        val now = System.currentTimeMillis()
+        headerTapTimes.addLast(now)
+        while (headerTapTimes.isNotEmpty() && now - headerTapTimes.first() > LOGGER_UNLOCK_WINDOW_MS) {
+            headerTapTimes.removeFirst()
+        }
+        if (headerTapTimes.size >= LOGGER_UNLOCK_TAP_COUNT) {
+            showLoggerView = true
+            headerTapTimes.clear()
+            AppLogger.info("RemodexApp", "Logger unlocked from hidden header gesture.")
+        }
     }
 
     val gate = when {
@@ -140,103 +177,118 @@ fun RemodexApp(
         fontStyle = fontStyle,
         toneMode = effectiveToneMode
     ) {
-        when (gate) {
-            AppGate.ONBOARDING -> {
-                OnboardingScreen(
-                    onContinue = { hasSeenOnboarding = true }
-                )
-            }
-            AppGate.PAYWALL -> {
-                PaywallScreen(
-                    onUnlock = { hasProAccess = true },
-                    onRestore = { hasProAccess = true }
-                )
-            }
-            AppGate.PAIRING -> {
-                PairingScreen(
-                    connectionState = connectionState,
-                    status = status,
-                    relayUrl = relayUrl,
-                    onRelayUrlChange = { relayUrl = it },
-                    sessionId = sessionId,
-                    onSessionIdChange = { sessionId = it },
-                    macDeviceId = macDeviceId,
-                    onMacDeviceIdChange = { macDeviceId = it },
-                    macIdentityPublicKey = macIdentityPublicKey,
-                    onMacIdentityPublicKeyChange = { macIdentityPublicKey = it },
-                    notificationsEnabled = notificationsEnabled,
-                    onRequestNotificationPermission = onRequestNotificationPermission,
-                    onRememberPairing = {
-                        service.rememberPairing(
-                            PairingPayload(
-                                sessionId = sessionId.trim(),
-                                relayUrl = relayUrl.trim(),
-                                macDeviceId = macDeviceId.trim(),
-                                macIdentityPublicKey = macIdentityPublicKey.trim(),
-                                expiresAt = expiresAt
+        if (showLoggerView) {
+            LoggerScreen(
+                entries = loggerEntries,
+                settings = loggerSettings,
+                onClose = { showLoggerView = false },
+                onClear = { AppLogger.clear() }
+            )
+        } else {
+            when (gate) {
+                AppGate.ONBOARDING -> {
+                    OnboardingScreen(
+                        onContinue = { hasSeenOnboarding = true }
+                    )
+                }
+                AppGate.PAYWALL -> {
+                    PaywallScreen(
+                        onUnlock = { hasProAccess = true },
+                        onRestore = { hasProAccess = true }
+                    )
+                }
+                AppGate.PAIRING -> {
+                    PairingScreen(
+                        connectionState = connectionState,
+                        status = status,
+                        relayUrl = relayUrl,
+                        onRelayUrlChange = { relayUrl = it },
+                        sessionId = sessionId,
+                        onSessionIdChange = { sessionId = it },
+                        macDeviceId = macDeviceId,
+                        onMacDeviceIdChange = { macDeviceId = it },
+                        macIdentityPublicKey = macIdentityPublicKey,
+                        onMacIdentityPublicKeyChange = { macIdentityPublicKey = it },
+                        notificationsEnabled = notificationsEnabled,
+                        onRequestNotificationPermission = onRequestNotificationPermission,
+                        onRememberPairing = {
+                            service.rememberPairing(
+                                PairingPayload(
+                                    sessionId = sessionId.trim(),
+                                    relayUrl = relayUrl.trim(),
+                                    macDeviceId = macDeviceId.trim(),
+                                    macIdentityPublicKey = macIdentityPublicKey.trim(),
+                                    expiresAt = expiresAt
+                                )
                             )
-                        )
-                    },
-                    onConnectDemo = {
-                        scope.launch {
-                            runCatching { service.connectWithFixture() }
-                        }
-                    },
-                    onConnectLive = {
-                        scope.launch {
-                            runCatching { service.connectLive() }
-                        }
-                    },
-                    onScannedPairing = { scannedPayload ->
-                        relayUrl = scannedPayload.relayUrl
-                        sessionId = scannedPayload.sessionId
-                        macDeviceId = scannedPayload.macDeviceId
-                        macIdentityPublicKey = scannedPayload.macIdentityPublicKey
-                        expiresAt = scannedPayload.expiresAt
-                        service.rememberPairing(scannedPayload)
-                        scope.launch {
-                            runCatching { service.connectLive() }
-                        }
-                    }
-                )
-            }
-            AppGate.WORKSPACE -> {
-                WorkspaceScreen(
-                    service = service,
-                    connectionState = connectionState,
-                    status = status,
-                    currentProjectPath = currentProjectPath,
-                    availableModels = availableModels,
-                    selectedModel = selectedModel,
-                    pendingPermissions = pendingPermissions,
-                    rateLimitInfo = rateLimitInfo,
-                    ciStatus = ciStatus,
-                    gitStatusSummary = gitStatusSummary,
-                    gitBranches = gitBranches,
-                    checkoutBranch = checkoutBranch,
-                    onCheckoutBranchChange = { checkoutBranch = it },
-                    commitMessage = commitMessage,
-                    onCommitMessageChange = { commitMessage = it },
-                    pushToken = pushToken,
-                    onPushTokenChange = { pushToken = it },
-                    manualPermissionId = manualPermissionId,
-                    onManualPermissionIdChange = { manualPermissionId = it },
-                    threads = threads,
-                    selectedThreadId = selectedThreadId,
-                    timeline = timeline,
-                    composerInput = composerInput,
-                    onComposerInputChange = { composerInput = it },
-                    notificationsEnabled = notificationsEnabled,
-                    onRequestNotificationPermission = onRequestNotificationPermission,
-                    eventLog = eventLog,
-                    todos = WebsiteFeatureTodos,
-                    todoStates = todoStates,
-                    onAdvanceTodo = { advanceNextTodo(todoStates) },
-                    fontStyle = fontStyle,
-                    toneMode = toneMode,
-                    onFontStyleChanged = { style -> fontStyleRaw = style.storageValue },
-                    onToneModeChanged = { mode -> toneModeRaw = mode.name }
-                )
+                        },
+                        onConnectDemo = {
+                            scope.launch {
+                                runCatching { service.connectWithFixture() }
+                            }
+                        },
+                        onConnectLive = {
+                            scope.launch {
+                                runCatching { service.connectLive() }
+                            }
+                        },
+                        onScannedPairing = { scannedPayload ->
+                            relayUrl = scannedPayload.relayUrl
+                            sessionId = scannedPayload.sessionId
+                            macDeviceId = scannedPayload.macDeviceId
+                            macIdentityPublicKey = scannedPayload.macIdentityPublicKey
+                            expiresAt = scannedPayload.expiresAt
+                            service.rememberPairing(scannedPayload)
+                            scope.launch {
+                                runCatching { service.connectLive() }
+                            }
+                        },
+                        onHeaderTap = onHeaderTap
+                    )
+                }
+                AppGate.WORKSPACE -> {
+                    WorkspaceScreen(
+                        service = service,
+                        connectionState = connectionState,
+                        status = status,
+                        currentProjectPath = currentProjectPath,
+                        availableModels = availableModels,
+                        selectedModel = selectedModel,
+                        pendingPermissions = pendingPermissions,
+                        rateLimitInfo = rateLimitInfo,
+                        ciStatus = ciStatus,
+                        gitStatusSummary = gitStatusSummary,
+                        gitBranches = gitBranches,
+                        checkoutBranch = checkoutBranch,
+                        onCheckoutBranchChange = { checkoutBranch = it },
+                        commitMessage = commitMessage,
+                        onCommitMessageChange = { commitMessage = it },
+                        pushToken = pushToken,
+                        onPushTokenChange = { pushToken = it },
+                        manualPermissionId = manualPermissionId,
+                        onManualPermissionIdChange = { manualPermissionId = it },
+                        threads = threads,
+                        selectedThreadId = selectedThreadId,
+                        timeline = timeline,
+                        composerInput = composerInput,
+                        onComposerInputChange = { composerInput = it },
+                        notificationsEnabled = notificationsEnabled,
+                        onRequestNotificationPermission = onRequestNotificationPermission,
+                        eventLog = eventLog,
+                        todos = WebsiteFeatureTodos,
+                        todoStates = todoStates,
+                        onAdvanceTodo = { advanceNextTodo(todoStates) },
+                        fontStyle = fontStyle,
+                        toneMode = toneMode,
+                        onFontStyleChanged = { style -> fontStyleRaw = style.storageValue },
+                        onToneModeChanged = { mode -> toneModeRaw = mode.name },
+                        loggerLevel = loggerLevel,
+                        loggerMaxLines = loggerMaxLines,
+                        onLoggerLevelChanged = { level -> loggerLevelRaw = level.name },
+                        onLoggerMaxLinesChanged = { maxLines -> loggerMaxLines = maxLines.coerceIn(200, 20_000) },
+                        onHeaderTap = onHeaderTap
+                    )
+                }
             }
         }
     }

@@ -3,6 +3,7 @@ package com.remodex.mobile.service
 import com.remodex.mobile.model.RpcMessage
 import com.remodex.mobile.model.ThreadSummary
 import com.remodex.mobile.model.TimelineEntry
+import com.remodex.mobile.service.logging.AppLogger
 import com.remodex.mobile.service.push.PushRegistrationPayload
 import com.remodex.mobile.service.secure.CodexSecureTransport
 import com.remodex.mobile.service.transport.FixtureRpcTransport
@@ -55,6 +56,10 @@ class CodexService(
     private val parser: RpcTransportParser = RpcTransportParser(),
     private val pairingStore: PairingStateStore? = null
 ) {
+    companion object {
+        private const val LOG_TAG = "CodexService"
+    }
+
     private enum class ConnectionMode {
         NONE,
         FIXTURE,
@@ -113,7 +118,13 @@ class CodexService(
         if (persistedPairing != null) {
             secureTransport.rememberPairing(persistedPairing)
             _connectionState.value = ConnectionState.Paired
+            AppLogger.info(
+                LOG_TAG,
+                "Loaded saved pairing for mac=${persistedPairing.macDeviceId} relay=${persistedPairing.relayUrl}."
+            )
             setStatus("Loaded saved pairing for ${persistedPairing.macDeviceId}.")
+        } else {
+            AppLogger.info(LOG_TAG, "No saved pairing found in local store.")
         }
     }
 
@@ -121,6 +132,10 @@ class CodexService(
         secureTransport.rememberPairing(payload)
         pairingStore?.save(payload)
         _connectionState.value = ConnectionState.Paired
+        AppLogger.info(
+            LOG_TAG,
+            "Pairing remembered for mac=${payload.macDeviceId} relay=${payload.relayUrl} expiresAt=${payload.expiresAt}."
+        )
         setStatus("Pairing saved for ${payload.macDeviceId}.", notify = true)
     }
 
@@ -135,10 +150,15 @@ class CodexService(
     suspend fun connectLive() {
         val pairing = secureTransport.currentPairing()
         if (pairing == null) {
+            AppLogger.warn(LOG_TAG, "connectLive rejected because pairing is missing.")
             _connectionState.value = ConnectionState.Failed("Pairing is missing.")
             setStatus("Pair first.", notify = true)
             return
         }
+        AppLogger.info(
+            LOG_TAG,
+            "connectLive starting for mac=${pairing.macDeviceId} relay=${pairing.relayUrl}."
+        )
         connect(
             transport = RealSecureRelayRpcTransport(pairing = pairing, secureTransport = secureTransport),
             modeLabel = "live secure relay",
@@ -149,11 +169,16 @@ class CodexService(
     private suspend fun connect(transport: RpcTransport, modeLabel: String, connectionMode: ConnectionMode) {
         val pairing = secureTransport.currentPairing()
         if (pairing == null) {
+            AppLogger.warn(LOG_TAG, "connect($modeLabel) rejected because pairing is missing.")
             _connectionState.value = ConnectionState.Failed("Pairing is missing.")
             setStatus("Pair first.", notify = true)
             return
         }
 
+        AppLogger.info(
+            LOG_TAG,
+            "connect($modeLabel) begin relay=${pairing.relayUrl} mac=${pairing.macDeviceId}."
+        )
         _connectionState.value = ConnectionState.Connecting
         setStatus("Connecting to ${pairing.relayUrl} via $modeLabel.", notify = true)
 
@@ -173,19 +198,23 @@ class CodexService(
             refreshModels(silentStatus = true)
             refreshCiStatus(silentStatus = true)
 
+            AppLogger.info(LOG_TAG, "connect($modeLabel) completed successfully.")
             setStatus("Connected via $modeLabel.", notify = true)
         } catch (error: Throwable) {
             activeConnectionMode = ConnectionMode.NONE
+            AppLogger.error(LOG_TAG, "connect($modeLabel) failed.", error)
             _connectionState.value = ConnectionState.Failed(error.message ?: "Unknown connection failure.")
             setStatus("Connect failed: ${error.message ?: "unknown error"}", notify = true)
         }
     }
 
     suspend fun reconnect() {
+        AppLogger.info(LOG_TAG, "reconnect requested with mode=$activeConnectionMode.")
         when (activeConnectionMode) {
             ConnectionMode.FIXTURE -> connectWithFixture()
             ConnectionMode.LIVE -> connectLive()
             ConnectionMode.NONE -> {
+                AppLogger.warn(LOG_TAG, "reconnect unavailable because no previous connection mode exists.")
                 _connectionState.value = ConnectionState.Failed("No previous connection mode.")
                 setStatus("Reconnect unavailable. Connect first.", notify = true)
             }
@@ -193,11 +222,13 @@ class CodexService(
     }
 
     suspend fun disconnect() {
+        AppLogger.info(LOG_TAG, "disconnect requested for mode=$activeConnectionMode.")
         runCatching { rpcTransport.close() }
         activeConnectionMode = ConnectionMode.NONE
         _connectionState.value = ConnectionState.Paired
         _timeline.value = emptyList()
         activeTurnIdByThread.clear()
+        AppLogger.info(LOG_TAG, "disconnect completed; connection state set back to PAIRED.")
         setStatus("Disconnected.", notify = true)
     }
 
@@ -914,6 +945,7 @@ class CodexService(
 
     private fun ensureConnected() {
         if (_connectionState.value != ConnectionState.Connected) {
+            AppLogger.warn(LOG_TAG, "Operation blocked because connection state is ${_connectionState.value}.")
             throw IllegalStateException("Connect first.")
         }
     }
@@ -926,16 +958,23 @@ class CodexService(
             val response = rpcTransport.request(method = method, params = params)
             val rpcError = response.error
             if (rpcError != null && rpcError.code == -32601) {
+                AppLogger.debug(LOG_TAG, "RPC method not found on relay: $method")
                 continue
             }
             throwIfRpcError(response, method)
+            AppLogger.debug(LOG_TAG, "RPC method succeeded: $method")
             return method to response
         }
+        AppLogger.info(LOG_TAG, "No candidate methods were available: ${methods.joinToString(",")}")
         return null
     }
 
     private fun throwIfRpcError(response: RpcMessage, method: String) {
         val rpcError = response.error ?: return
+        AppLogger.warn(
+            LOG_TAG,
+            "RPC error for method=$method code=${rpcError.code} message=${rpcError.message}"
+        )
         throw IllegalStateException("$method failed (${rpcError.code}): ${rpcError.message}")
     }
 
@@ -945,6 +984,7 @@ class CodexService(
         eventKind: ServiceEventKind = ServiceEventKind.WORK_STATUS_CHANGED
     ) {
         _status.value = message
+        AppLogger.info(LOG_TAG, "status[$eventKind]: $message")
         if (notify) {
             publishEvent(kind = eventKind, title = eventTitleFor(eventKind), message = message)
         }

@@ -49,7 +49,8 @@ fun PairingScreen(
     onRememberPairing: () -> Unit,
     onConnectDemo: () -> Unit,
     onConnectLive: () -> Unit,
-    onScannedPairing: (PairingPayload) -> Unit
+    onScannedPairing: (PairingPayload) -> Unit,
+    onHeaderTap: () -> Unit
 ) {
     var showManualEntry by rememberSaveable { mutableStateOf(false) }
     var scannerErrorMessage by remember { mutableStateOf<String?>(null) }
@@ -92,7 +93,8 @@ fun PairingScreen(
                     stateLabel = connectionStateLabel(connectionState),
                     status = status,
                     indicatorColor = indicatorColor.value,
-                    subtitle = "Login flow: pairing -> connect"
+                    subtitle = "Login flow: pairing -> connect",
+                    onTap = onHeaderTap
                 )
             }
             item {
@@ -105,7 +107,7 @@ fun PairingScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(340.dp),
-                            onScan = { scannedCode, resetScanLock ->
+                            onScan = { scannedCode ->
                                 when (val result = validatePairingQrCode(scannedCode)) {
                                     is QrScannerPairingValidationResult.Success -> {
                                         onScannedPairing(result.payload)
@@ -114,13 +116,11 @@ fun PairingScreen(
 
                                     is QrScannerPairingValidationResult.ScanError -> {
                                         scannerErrorMessage = result.message
-                                        resetScanLock()
                                     }
 
                                     is QrScannerPairingValidationResult.BridgeUpdateRequired -> {
                                         didCopyBridgeCommand = false
                                         bridgeUpdatePrompt = result.prompt
-                                        resetScanLock()
                                     }
                                 }
                             }

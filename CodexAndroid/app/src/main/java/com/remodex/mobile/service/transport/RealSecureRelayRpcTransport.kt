@@ -4,8 +4,10 @@ import com.remodex.mobile.model.CODEX_SECURE_PROTOCOL_VERSION
 import com.remodex.mobile.model.RpcMessage
 import com.remodex.mobile.model.SecureTranscriptInput
 import com.remodex.mobile.service.PairingPayload
+import com.remodex.mobile.service.logging.AppLogger
 import com.remodex.mobile.service.secure.CodexSecureTransport
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
@@ -29,6 +31,7 @@ import org.bouncycastle.crypto.params.X25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.net.URI
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
@@ -48,6 +51,8 @@ private const val HANDSHAKE_LABEL_CLIENT_AUTH = "client-auth"
 private const val REQUEST_TIMEOUT_MS = 20_000L
 private const val HANDSHAKE_TIMEOUT_MS = 12_000L
 private const val CONNECT_TIMEOUT_MS = 10_000L
+private const val OPEN_HANDSHAKE_ATTEMPTS = 2
+private const val LOG_TAG = "RelayTransport"
 
 class RealSecureRelayRpcTransport(
     private val pairing: PairingPayload,
@@ -62,6 +67,7 @@ class RealSecureRelayRpcTransport(
     private val secureRandom = SecureRandom()
     private val requestIdCounter = AtomicLong(1)
     private val stateMutex = Mutex()
+    private val requestMutex = Mutex()
     private val pendingResponses = ConcurrentHashMap<String, CompletableDeferred<RpcMessage>>()
 
     @Volatile
@@ -79,37 +85,80 @@ class RealSecureRelayRpcTransport(
     override suspend fun open() {
         stateMutex.withLock {
             if (isOpen) {
+                AppLogger.debug(LOG_TAG, "open() skipped because transport is already open. ${connectionTag()}")
                 return
             }
-            controlMessages.close()
-            controlMessages = Channel(Channel.UNLIMITED)
-            pendingResponses.clear()
-            connectSocket()
-            try {
-                performSecureHandshake()
-                isOpen = true
-            } catch (error: Throwable) {
-                closeSocket()
-                throw error
+            AppLogger.info(
+                LOG_TAG,
+                "open() starting with maxAttempts=$OPEN_HANDSHAKE_ATTEMPTS. ${connectionTag()}"
+            )
+
+            var lastError: Throwable? = null
+            for (attempt in 1..OPEN_HANDSHAKE_ATTEMPTS) {
+                resetHandshakeState()
+                try {
+                    AppLogger.info(LOG_TAG, "open() attempt $attempt/$OPEN_HANDSHAKE_ATTEMPTS connecting socket.")
+                    connectSocket()
+                    performSecureHandshake()
+                    isOpen = true
+                    AppLogger.info(
+                        LOG_TAG,
+                        "open() completed on attempt $attempt; secure session established. ${connectionTag()}"
+                    )
+                    return
+                } catch (error: Throwable) {
+                    lastError = error
+                    AppLogger.error(
+                        LOG_TAG,
+                        "open() attempt $attempt failed during connect/handshake. ${connectionTag()}",
+                        error
+                    )
+                    closeSocket()
+                    if (attempt >= OPEN_HANDSHAKE_ATTEMPTS || !isRetryableOpenFailure(error)) {
+                        throw error
+                    }
+                    AppLogger.warn(
+                        LOG_TAG,
+                        "open() will retry after retryable failure on attempt $attempt."
+                    )
+                }
             }
+
+            throw (lastError ?: IllegalStateException("open() failed without a concrete error."))
         }
     }
 
     override suspend fun close() {
         stateMutex.withLock {
+            AppLogger.info(LOG_TAG, "close() requested. ${connectionTag()}")
             failPendingResponses(IllegalStateException("Transport closed."))
             closeSocket()
         }
     }
 
     override suspend fun request(method: String, params: JsonObject): RpcMessage {
+        return requestMutex.withLock {
+            requestInternal(method, params, allowRetryOnSendFailure = true)
+        }
+    }
+
+    private suspend fun requestInternal(
+        method: String,
+        params: JsonObject,
+        allowRetryOnSendFailure: Boolean
+    ): RpcMessage {
         if (!isOpen) {
+            AppLogger.info(LOG_TAG, "request($method) opening transport lazily. ${connectionTag()}")
             open()
         }
-
         val requestId = requestIdCounter.getAndIncrement().toString()
         val responseDeferred = CompletableDeferred<RpcMessage>()
         pendingResponses[requestId] = responseDeferred
+        val startedAt = System.currentTimeMillis()
+        AppLogger.info(
+            LOG_TAG,
+            "rpc request start id=$requestId method=$method pending=${pendingResponses.size}. ${connectionTag()}"
+        )
 
         val rpc = RpcMessage(
             jsonrpc = "2.0",
@@ -118,24 +167,99 @@ class RealSecureRelayRpcTransport(
             params = params
         )
         val payloadText = json.encodeToString(rpc)
-        sendEncryptedApplicationPayload(payloadText)
+        try {
+            sendEncryptedApplicationPayload(payloadText)
+        } catch (error: Throwable) {
+            pendingResponses.remove(requestId)
+            AppLogger.warn(
+                LOG_TAG,
+                "rpc request send failed id=$requestId method=$method recoverable=${isRecoverableSocketSendFailure(error)}.",
+                error
+            )
+            if (allowRetryOnSendFailure && isRecoverableSocketSendFailure(error)) {
+                AppLogger.info(
+                    LOG_TAG,
+                    "rpc request id=$requestId method=$method attempting one session reopen retry after send failure."
+                )
+                reopenSessionAfterSendFailure()
+                return requestInternal(method, params, allowRetryOnSendFailure = false)
+            }
+            throw error
+        }
 
         return try {
-            withTimeout(REQUEST_TIMEOUT_MS) { responseDeferred.await() }
+            val response = withTimeout(REQUEST_TIMEOUT_MS) { responseDeferred.await() }
+            val elapsed = System.currentTimeMillis() - startedAt
+            AppLogger.info(
+                LOG_TAG,
+                "rpc request success id=$requestId method=$method elapsedMs=$elapsed."
+            )
+            response
+        } catch (error: Throwable) {
+            val elapsed = System.currentTimeMillis() - startedAt
+            AppLogger.warn(
+                LOG_TAG,
+                "rpc request failed id=$requestId method=$method elapsedMs=$elapsed.",
+                error
+            )
+            throw error
         } finally {
             pendingResponses.remove(requestId)
         }
     }
 
+    private fun isRecoverableSocketSendFailure(error: Throwable): Boolean {
+        val message = error.message.orEmpty()
+        return error is IllegalStateException &&
+            (message.contains("Failed to send wire payload to relay socket", ignoreCase = true) ||
+                message.contains("Relay socket is unavailable", ignoreCase = true) ||
+                message.contains("socket closed", ignoreCase = true))
+    }
+
+    private suspend fun reopenSessionAfterSendFailure() {
+        AppLogger.warn(LOG_TAG, "Reopening socket/session after recoverable send failure. ${connectionTag()}")
+        stateMutex.withLock {
+            closeSocket()
+            controlMessages.close()
+            controlMessages = Channel(Channel.UNLIMITED)
+            pendingResponses.clear()
+        }
+        open()
+    }
+
+    private fun resetHandshakeState() {
+        controlMessages.close()
+        controlMessages = Channel(Channel.UNLIMITED)
+        pendingResponses.clear()
+        secureSession = null
+        isOpen = false
+    }
+
+    private fun isRetryableOpenFailure(error: Throwable): Boolean {
+        if (error is TimeoutCancellationException) {
+            return true
+        }
+        val message = error.message.orEmpty()
+        return message.contains("timed out", ignoreCase = true) ||
+            message.contains("socket", ignoreCase = true) ||
+            message.contains("relay", ignoreCase = true)
+    }
+
     private suspend fun connectSocket() {
         val opened = CompletableDeferred<Unit>()
+        val wsUrl = resolveRelaySessionWebSocketUrl()
+        AppLogger.info(LOG_TAG, "Connecting websocket to ${redactRelayUrl(wsUrl)}.")
         val request = Request.Builder()
-            .url(resolveRelaySessionWebSocketUrl())
+            .url(wsUrl)
             .header("x-role", "android")
             .build()
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                AppLogger.info(
+                    LOG_TAG,
+                    "WebSocket opened with HTTP ${response.code}. ${connectionTag()}"
+                )
                 opened.complete(Unit)
             }
 
@@ -144,14 +268,22 @@ class RealSecureRelayRpcTransport(
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                AppLogger.warn(LOG_TAG, "WebSocket closed code=$code reason=$reason. ${connectionTag()}")
                 handleSocketClosed(IllegalStateException("Relay socket closed: $code $reason"))
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                AppLogger.info(LOG_TAG, "WebSocket closing code=$code reason=$reason.")
                 webSocket.close(code, reason)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                val code = response?.code?.toString() ?: "n/a"
+                AppLogger.error(
+                    LOG_TAG,
+                    "WebSocket failure responseCode=$code opened=${opened.isCompleted}. ${connectionTag()}",
+                    t
+                )
                 if (!opened.isCompleted) {
                     opened.completeExceptionally(t)
                 } else {
@@ -164,9 +296,11 @@ class RealSecureRelayRpcTransport(
         withTimeout(CONNECT_TIMEOUT_MS) {
             opened.await()
         }
+        AppLogger.info(LOG_TAG, "WebSocket connect confirmed within timeout.")
     }
 
     private suspend fun performSecureHandshake() {
+        AppLogger.info(LOG_TAG, "Handshake started. ${connectionTag()}")
         val clientNonce = ByteArray(32).also { secureRandom.nextBytes(it) }
         val phoneEphemeralPrivate = X25519PrivateKeyParameters(secureRandom)
         val phoneEphemeralPublic = phoneEphemeralPrivate.generatePublicKey().encoded
@@ -180,9 +314,17 @@ class RealSecureRelayRpcTransport(
             phoneEphemeralPublicKey = encodeBase64(phoneEphemeralPublic),
             clientNonce = encodeBase64(clientNonce)
         )
+        AppLogger.info(
+            LOG_TAG,
+            "Sending clientHello protocol=${clientHello.protocolVersion} mode=${clientHello.handshakeMode}."
+        )
         sendControl(clientHello)
 
         val serverHello = waitForMatchingServerHello(expectedClientNonce = clientHello.clientNonce)
+        AppLogger.info(
+            LOG_TAG,
+            "Received serverHello keyEpoch=${serverHello.keyEpoch} protocol=${serverHello.protocolVersion}."
+        )
         validateServerHello(serverHello)
 
         val transcript = secureTransport.buildTranscriptBytes(
@@ -208,9 +350,11 @@ class RealSecureRelayRpcTransport(
         if (!verifySignature(publicKey = macPublicKey, payload = transcript, signature = macSignature)) {
             throw IllegalStateException("Server signature verification failed.")
         }
+        AppLogger.info(LOG_TAG, "Server signature verification passed.")
 
         val clientAuthTranscript = buildClientAuthTranscript(transcript)
         val phoneSignature = signPayload(phoneIdentity.privateSeed, clientAuthTranscript)
+        AppLogger.info(LOG_TAG, "Sending clientAuth for keyEpoch=${serverHello.keyEpoch}.")
         sendControl(
             SecureClientAuth(
                 sessionId = pairing.sessionId,
@@ -225,6 +369,7 @@ class RealSecureRelayRpcTransport(
         if (ready.sessionId != pairing.sessionId || ready.keyEpoch != serverHello.keyEpoch) {
             throw IllegalStateException("Secure ready mismatch.")
         }
+        AppLogger.info(LOG_TAG, "Received secureReady keyEpoch=${ready.keyEpoch}.")
 
         val sharedSecret = deriveSharedSecret(
             privateKey = phoneEphemeralPrivate,
@@ -251,6 +396,10 @@ class RealSecureRelayRpcTransport(
             phoneToMacKey = phoneToMac,
             macToPhoneKey = macToPhone
         )
+        AppLogger.info(
+            LOG_TAG,
+            "Secure session activated keyEpoch=${serverHello.keyEpoch} phoneId=${phoneIdentity.deviceId}."
+        )
 
         sendControl(
             SecureResumeState(
@@ -259,16 +408,21 @@ class RealSecureRelayRpcTransport(
                 lastAppliedBridgeOutboundSeq = 0
             )
         )
+        AppLogger.info(LOG_TAG, "Handshake completed; resumeState sent.")
     }
 
     private fun processIncomingText(rawText: String) {
         val parsed = try {
             json.parseToJsonElement(rawText) as? JsonObject
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            AppLogger.debug(LOG_TAG, "Ignoring non-JSON websocket message (${rawText.length} chars).", error)
             null
         } ?: return
 
         val kind = (parsed["kind"] as? JsonPrimitive)?.contentOrNull
+        if (kind != null) {
+            AppLogger.debug(LOG_TAG, "Incoming websocket message kind=$kind.")
+        }
         when (kind) {
             "serverHello", "secureReady", "secureError" -> {
                 controlMessages.trySend(parsed)
@@ -279,6 +433,7 @@ class RealSecureRelayRpcTransport(
             }
 
             else -> {
+                AppLogger.debug(LOG_TAG, "Incoming websocket payload treated as raw RPC text.")
                 handleRpcPayloadText(rawText)
             }
         }
@@ -287,15 +442,27 @@ class RealSecureRelayRpcTransport(
     private fun handleEncryptedEnvelope(parsed: JsonObject) {
         val envelope = try {
             json.decodeFromJsonElement<SecureEnvelope>(parsed)
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            AppLogger.warn(LOG_TAG, "Failed to decode encrypted envelope.", error)
             return
         }
 
-        val session = secureSession ?: return
+        val session = secureSession ?: run {
+            AppLogger.warn(LOG_TAG, "Dropping encrypted envelope because secure session is null.")
+            return
+        }
         if (envelope.sessionId != session.sessionId || envelope.keyEpoch != session.keyEpoch) {
+            AppLogger.warn(
+                LOG_TAG,
+                "Dropping envelope due to session/key mismatch epoch=${envelope.keyEpoch} counter=${envelope.counter}."
+            )
             return
         }
         if (envelope.sender != "mac" || envelope.counter <= session.lastInboundCounter) {
+            AppLogger.debug(
+                LOG_TAG,
+                "Ignoring envelope sender=${envelope.sender} counter=${envelope.counter} lastInbound=${session.lastInboundCounter}."
+            )
             return
         }
 
@@ -307,13 +474,23 @@ class RealSecureRelayRpcTransport(
                 ciphertext = decodeBase64(envelope.ciphertext),
                 tag = decodeBase64(envelope.tag)
             )
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            AppLogger.warn(
+                LOG_TAG,
+                "Failed decrypting envelope counter=${envelope.counter}.",
+                error
+            )
             return
         }
 
         val payload = try {
             json.decodeFromString<SecureApplicationPayload>(plaintext.decodeToString())
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            AppLogger.warn(
+                LOG_TAG,
+                "Failed decoding secure application payload counter=${envelope.counter}.",
+                error
+            )
             return
         }
 
@@ -322,6 +499,10 @@ class RealSecureRelayRpcTransport(
             session.lastAppliedBridgeOutboundSeq = payload.bridgeOutboundSeq
         }
         secureSession = session
+        AppLogger.debug(
+            LOG_TAG,
+            "Processed encrypted envelope counter=${envelope.counter} bridgeSeq=${payload.bridgeOutboundSeq ?: -1}."
+        )
 
         handleRpcPayloadText(payload.payloadText)
     }
@@ -329,12 +510,14 @@ class RealSecureRelayRpcTransport(
     private fun handleRpcPayloadText(payloadText: String) {
         val message = try {
             json.decodeFromString<RpcMessage>(payloadText)
-        } catch (_: Throwable) {
+        } catch (error: Throwable) {
+            AppLogger.warn(LOG_TAG, "Failed decoding RPC payload text (${payloadText.length} chars).", error)
             return
         }
 
         val idKey = rpcIdKey(message.id) ?: return
         if (message.result != null || message.error != null) {
+            AppLogger.debug(LOG_TAG, "Completing RPC response for id=$idKey.")
             pendingResponses.remove(idKey)?.complete(message)
         }
     }
@@ -361,6 +544,7 @@ class RealSecureRelayRpcTransport(
         )
         session.nextOutboundCounter += 1
         secureSession = session
+        AppLogger.debug(LOG_TAG, "Sending encrypted envelope counter=$counter keyEpoch=${session.keyEpoch}.")
         sendControl(envelope)
     }
 
@@ -384,6 +568,7 @@ class RealSecureRelayRpcTransport(
             val raw = waitForControl("serverHello")
             val hello = json.decodeFromJsonElement<SecureServerHello>(raw)
             if (hello.clientNonce != null && hello.clientNonce != expectedClientNonce) {
+                AppLogger.warn(LOG_TAG, "Ignoring serverHello with mismatched client nonce.")
                 continue
             }
             return hello
@@ -398,9 +583,14 @@ class RealSecureRelayRpcTransport(
                 val kind = (message["kind"] as? JsonPrimitive)?.contentOrNull ?: continue
                 if (kind == "secureError") {
                     val secureError = json.decodeFromJsonElement<SecureErrorMessage>(message)
+                    AppLogger.error(
+                        LOG_TAG,
+                        "Received secureError code=${secureError.code} message=${secureError.message}."
+                    )
                     throw IllegalStateException(secureError.message)
                 }
                 if (kind == expectedKind) {
+                    AppLogger.debug(LOG_TAG, "waitForControl matched kind=$expectedKind.")
                     matched = message
                 }
             }
@@ -409,18 +599,23 @@ class RealSecureRelayRpcTransport(
     }
 
     private fun sendControl(value: Any) {
-        val text = when (value) {
-            is SecureClientHello -> json.encodeToString(value)
-            is SecureClientAuth -> json.encodeToString(value)
-            is SecureResumeState -> json.encodeToString(value)
-            is SecureEnvelope -> json.encodeToString(value)
+        val (payloadKind, text) = when (value) {
+            is SecureClientHello -> "clientHello" to json.encodeToString(value)
+            is SecureClientAuth -> "clientAuth" to json.encodeToString(value)
+            is SecureResumeState -> "resumeState" to json.encodeToString(value)
+            is SecureEnvelope -> "encryptedEnvelope" to json.encodeToString(value)
             else -> throw IllegalArgumentException("Unsupported wire payload.")
         }
         val socket = webSocket ?: throw IllegalStateException("Relay socket is unavailable.")
         val accepted = socket.send(text)
         if (!accepted) {
+            AppLogger.error(
+                LOG_TAG,
+                "Socket send returned false for kind=$payloadKind while isOpen=$isOpen. ${connectionTag()}"
+            )
             throw IllegalStateException("Failed to send wire payload to relay socket.")
         }
+        AppLogger.debug(LOG_TAG, "Socket send accepted for kind=$payloadKind.")
     }
 
     private fun resolveRelaySessionWebSocketUrl(): String {
@@ -433,6 +628,7 @@ class RealSecureRelayRpcTransport(
     }
 
     private fun handleSocketClosed(cause: Throwable) {
+        AppLogger.warn(LOG_TAG, "Socket/session closed. ${connectionTag()}", cause)
         isOpen = false
         secureSession = null
         failPendingResponses(cause)
@@ -441,6 +637,9 @@ class RealSecureRelayRpcTransport(
     private fun failPendingResponses(cause: Throwable) {
         val pending = pendingResponses.values.toList()
         pendingResponses.clear()
+        if (pending.isNotEmpty()) {
+            AppLogger.warn(LOG_TAG, "Failing ${pending.size} pending RPC response(s).", cause)
+        }
         pending.forEach { deferred ->
             if (!deferred.isCompleted) {
                 deferred.completeExceptionally(cause)
@@ -449,6 +648,7 @@ class RealSecureRelayRpcTransport(
     }
 
     private fun closeSocket() {
+        AppLogger.info(LOG_TAG, "Closing websocket. ${connectionTag()}")
         isOpen = false
         secureSession = null
         runCatching { webSocket?.close(1000, "client_close") }
@@ -459,6 +659,7 @@ class RealSecureRelayRpcTransport(
         val privateSeed = ByteArray(32).also { secureRandom.nextBytes(it) }
         val privateKey = Ed25519PrivateKeyParameters(privateSeed, 0)
         val publicKey = privateKey.generatePublicKey().encoded
+        AppLogger.info(LOG_TAG, "Generated ephemeral phone identity for transport session.")
         return PhoneIdentity(
             deviceId = "android-${UUID.randomUUID()}",
             privateSeed = privateSeed,
@@ -549,6 +750,28 @@ class RealSecureRelayRpcTransport(
         cipher.init(Cipher.DECRYPT_MODE, secretKey, spec)
         val combined = ciphertext + tag
         return cipher.doFinal(combined)
+    }
+
+    private fun connectionTag(): String {
+        return "relay=${relayHostLabel()} session=${sessionHash(pairing.sessionId)} mac=${pairing.macDeviceId}"
+    }
+
+    private fun relayHostLabel(): String {
+        return runCatching { URI(pairing.relayUrl.trim()).host }.getOrNull()
+            ?: pairing.relayUrl.trim()
+    }
+
+    private fun sessionHash(value: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        return digest.take(6).joinToString("") { "%02x".format(it) }
+    }
+
+    private fun redactRelayUrl(url: String): String {
+        return if (pairing.sessionId.isBlank()) {
+            url
+        } else {
+            url.replace(pairing.sessionId, "<session>")
+        }
     }
 
     private fun rpcIdKey(id: JsonElement?): String? {

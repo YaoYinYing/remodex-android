@@ -19,6 +19,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +32,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -66,6 +68,7 @@ import com.google.zxing.common.HybridBinarizer
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.delay
 
 private const val ZXING_FALLBACK_MIN_INTERVAL_MS = 180L
 private val QR_DECODE_HINTS = mapOf(
@@ -76,12 +79,14 @@ private val QR_DECODE_HINTS = mapOf(
 @Composable
 fun PairingQrScannerSurface(
     modifier: Modifier = Modifier,
-    onScan: (String, resetScanLock: () -> Unit) -> Unit
+    onScan: (String) -> Unit
 ) {
     val context = LocalContext.current
     val activity = context.findActivity()
     var hasCameraPermission by rememberSaveable { mutableStateOf(false) }
     var isCheckingPermission by rememberSaveable { mutableStateOf(true) }
+    var scannerPaused by rememberSaveable { mutableStateOf(false) }
+    var showReadBanner by rememberSaveable { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -105,6 +110,14 @@ fun PairingQrScannerSurface(
         }
     }
 
+    LaunchedEffect(showReadBanner) {
+        if (!showReadBanner) {
+            return@LaunchedEffect
+        }
+        delay(2200)
+        showReadBanner = false
+    }
+
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -118,11 +131,31 @@ fun PairingQrScannerSurface(
                 }
             }
             hasCameraPermission -> {
-                QrCameraPreview(
-                    modifier = Modifier.fillMaxSize(),
-                    onScan = onScan
-                )
-                ScannerOverlay()
+                if (!scannerPaused) {
+                    QrCameraPreview(
+                        modifier = Modifier.fillMaxSize(),
+                        onScan = { scanned ->
+                            scannerPaused = true
+                            showReadBanner = true
+                            onScan(scanned)
+                        }
+                    )
+                    ScannerOverlay()
+                } else {
+                    PausedScannerCard(
+                        onResume = {
+                            scannerPaused = false
+                        }
+                    )
+                }
+
+                if (showReadBanner) {
+                    ScanNotificationBanner(
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 12.dp, start = 12.dp, end = 12.dp)
+                    )
+                }
             }
             else -> {
                 CameraPermissionCard(
@@ -151,7 +184,7 @@ fun PairingQrScannerSurface(
 @Composable
 private fun QrCameraPreview(
     modifier: Modifier = Modifier,
-    onScan: (String, resetScanLock: () -> Unit) -> Unit
+    onScan: (String) -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -207,9 +240,7 @@ private fun QrCameraPreview(
                         val scannedText = mlKitDecoded ?: fallbackDecoded
                         if (!scannedText.isNullOrBlank() && scanLock.compareAndSet(false, true)) {
                             mainExecutor.execute {
-                                onScanState(scannedText) {
-                                    scanLock.set(false)
-                                }
+                                onScanState(scannedText)
                             }
                         }
                     }
@@ -217,9 +248,7 @@ private fun QrCameraPreview(
                         val fallbackDecoded = maybeDecodeWithZxingFallback(fallbackFrame, lastZxingFallbackAt)
                         if (!fallbackDecoded.isNullOrBlank() && scanLock.compareAndSet(false, true)) {
                             mainExecutor.execute {
-                                onScanState(fallbackDecoded) {
-                                    scanLock.set(false)
-                                }
+                                onScanState(fallbackDecoded)
                             }
                         }
                     }
@@ -257,6 +286,49 @@ private fun QrCameraPreview(
         factory = { previewView },
         modifier = modifier
     )
+}
+
+@Composable
+private fun ScanNotificationBanner(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = Color(0xFF0D5EAF),
+        tonalElevation = 0.dp,
+        shadowElevation = 4.dp
+    ) {
+        Text(
+            text = "QR code detected. Processing secure pairing...",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+        )
+    }
+}
+
+@Composable
+private fun PausedScannerCard(onResume: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.82f))
+            .clickable(onClick = onResume)
+            .padding(20.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            text = "Scan Paused",
+            style = MaterialTheme.typography.titleMedium,
+            color = Color.White
+        )
+        Text(
+            text = "Tap this camera area to start a new scan.",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.padding(top = 8.dp)
+        )
+    }
 }
 
 @Composable

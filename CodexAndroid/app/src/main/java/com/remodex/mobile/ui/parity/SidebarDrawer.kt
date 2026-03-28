@@ -9,10 +9,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
 
@@ -32,10 +39,19 @@ fun SidebarDrawerContent(
     onAutoRefreshChanged: (Boolean) -> Unit,
     onAdvanceTodo: () -> Unit,
     onRefreshWorkspace: () -> Unit,
+    loggerLevel: LoggerLevel,
+    loggerMaxLines: Int,
+    onLoggerLevelChanged: (LoggerLevel) -> Unit,
+    onLoggerMaxLinesChanged: (Int) -> Unit,
     onGitPull: () -> Unit,
     onGitPush: () -> Unit,
     onDisconnect: () -> Unit
 ) {
+    var loggerLinesInput by remember { mutableStateOf(loggerMaxLines.toString()) }
+    LaunchedEffect(loggerMaxLines) {
+        loggerLinesInput = loggerMaxLines.toString()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -125,6 +141,75 @@ fun SidebarDrawerContent(
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Force Refresh")
+                }
+            }
+            Text("Logger level: ${loggerLevel.name}", style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = { onLoggerLevelChanged(LoggerLevel.DEBUG) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Debug")
+                }
+                OutlinedButton(
+                    onClick = { onLoggerLevelChanged(LoggerLevel.INFO) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Info")
+                }
+                OutlinedButton(
+                    onClick = { onLoggerLevelChanged(LoggerLevel.WARN) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Warn")
+                }
+                OutlinedButton(
+                    onClick = { onLoggerLevelChanged(LoggerLevel.ERROR) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Error")
+                }
+            }
+            OutlinedTextField(
+                value = loggerLinesInput,
+                onValueChange = { loggerLinesInput = it.filter { ch -> ch.isDigit() }.take(6) },
+                label = { Text("Logger max lines") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        val current = loggerLinesInput.toIntOrNull() ?: loggerMaxLines
+                        val updated = (current - 500).coerceAtLeast(200)
+                        loggerLinesInput = updated.toString()
+                        onLoggerMaxLinesChanged(updated)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("-500")
+                }
+                OutlinedButton(
+                    onClick = {
+                        val current = loggerLinesInput.toIntOrNull() ?: loggerMaxLines
+                        val updated = (current + 500).coerceAtMost(20000)
+                        loggerLinesInput = updated.toString()
+                        onLoggerMaxLinesChanged(updated)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("+500")
+                }
+                Button(
+                    onClick = {
+                        val parsed = loggerLinesInput.toIntOrNull()
+                        if (parsed != null) {
+                            onLoggerMaxLinesChanged(parsed)
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Apply")
                 }
             }
             if (!notificationsEnabled) {
