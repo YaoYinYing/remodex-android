@@ -24,11 +24,21 @@ class SharedPreferencesPairingStateStore(
             sessionId.isEmpty() ||
             relayUrl.isEmpty() ||
             macDeviceId.isEmpty() ||
-            macIdentityPublicKey.isEmpty() ||
-            expiresAt <= System.currentTimeMillis()
+            macIdentityPublicKey.isEmpty()
         ) {
             clear()
             return null
+        }
+
+        val now = System.currentTimeMillis()
+        val storedExpiresAt = if (expiresAt > 0L) expiresAt else now + CACHE_RECOVERY_EXTENSION_MS
+        if (now > storedExpiresAt + CACHE_RETENTION_AFTER_EXPIRY_MS) {
+            clear()
+            return null
+        }
+        val effectiveExpiresAt = maxOf(storedExpiresAt, now + CACHE_RECOVERY_EXTENSION_MS)
+        if (effectiveExpiresAt != storedExpiresAt) {
+            prefs.edit().putLong(KEY_EXPIRES_AT, effectiveExpiresAt).apply()
         }
 
         return PairingPayload(
@@ -36,7 +46,7 @@ class SharedPreferencesPairingStateStore(
             relayUrl = relayUrl,
             macDeviceId = macDeviceId,
             macIdentityPublicKey = macIdentityPublicKey,
-            expiresAt = expiresAt
+            expiresAt = effectiveExpiresAt
         )
     }
 
@@ -61,5 +71,7 @@ class SharedPreferencesPairingStateStore(
         const val KEY_MAC_DEVICE_ID = "mac_device_id"
         const val KEY_MAC_IDENTITY_PUBLIC_KEY = "mac_identity_public_key"
         const val KEY_EXPIRES_AT = "expires_at"
+        const val CACHE_RECOVERY_EXTENSION_MS = 1000L * 60L * 60L * 24L * 30L
+        const val CACHE_RETENTION_AFTER_EXPIRY_MS = 1000L * 60L * 60L * 24L * 120L
     }
 }

@@ -52,6 +52,24 @@ data class PendingPermissionRequest(
     val summary: String?
 )
 
+data class FileAutocompleteMatch(
+    val path: String,
+    val fileName: String
+)
+
+data class SkillSuggestion(
+    val id: String,
+    val name: String,
+    val description: String?,
+    val path: String?,
+    val enabled: Boolean
+)
+
+data class TurnImageAttachment(
+    val dataUrl: String,
+    val label: String? = null
+)
+
 class CodexService(
     private val secureTransport: CodexSecureTransport = CodexSecureTransport(),
     private val parser: RpcTransportParser = RpcTransportParser(),
@@ -110,6 +128,9 @@ class CodexService(
     val events: SharedFlow<ServiceEvent> = _events
 
     private val activeTurnIdByThread = mutableMapOf<String, String>()
+    private val projectPathByThread = mutableMapOf<String, String>()
+    private val rpcMethodAliasCache = mutableMapOf<String, String>()
+    private val unavailableMethodKeyCache = mutableSetOf<String>()
     private var rpcTransport: RpcTransport = FixtureRpcTransport()
     private var activeTransportLabel: String = "none"
     private var activeConnectionMode: ConnectionMode = ConnectionMode.NONE
@@ -139,6 +160,8 @@ class CodexService(
         )
         setStatus("Pairing saved for ${payload.macDeviceId}.", notify = true)
     }
+
+    fun currentPairing(): PairingPayload? = secureTransport.currentPairing()
 
     suspend fun connectWithFixture() {
         connect(
@@ -186,19 +209,21 @@ class CodexService(
         try {
             runCatching { rpcTransport.close() }
             rpcTransport = transport
+            rpcMethodAliasCache.clear()
+            unavailableMethodKeyCache.clear()
             rpcTransport.open()
             initializeSession()
             activeTransportLabel = modeLabel
             activeConnectionMode = connectionMode
             _connectionState.value = ConnectionState.Connected
 
-            refreshThreads(silentStatus = true)
-            refreshGitStatus(silentStatus = true)
-            refreshGitBranches(silentStatus = true)
-            refreshRateLimitInfo(silentStatus = true)
-            refreshPendingPermissions(silentStatus = true)
-            refreshModels(silentStatus = true)
-            refreshCiStatus(silentStatus = true)
+            refreshThreads(silentStatus = true, includeTimeline = false)
+            runBootstrapRefresh("git/status") { refreshGitStatus(silentStatus = true) }
+            runBootstrapRefresh("git/branches") { refreshGitBranches(silentStatus = true) }
+            runBootstrapRefresh("rate_limit/status") { refreshRateLimitInfo(silentStatus = true) }
+            runBootstrapRefresh("permissions/pending") { refreshPendingPermissions(silentStatus = true) }
+            runBootstrapRefresh("models/list") { refreshModels(silentStatus = true) }
+            runBootstrapRefresh("ci/status") { refreshCiStatus(silentStatus = true) }
 
             AppLogger.info(LOG_TAG, "connect($modeLabel) completed successfully.")
             setStatus("Connected via $modeLabel.", notify = true)
@@ -282,6 +307,16 @@ class CodexService(
         }
     }
 
+    private suspend fun runBootstrapRefresh(label: String, block: suspend () -> Unit) {
+        runCatching { block() }.onFailure { error ->
+            AppLogger.warn(
+                LOG_TAG,
+                "bootstrap refresh '$label' failed; keeping session connected.",
+                error
+            )
+        }
+    }
+
     suspend fun reconnect() {
         AppLogger.info(LOG_TAG, "reconnect requested with mode=$activeConnectionMode.")
         when (activeConnectionMode) {
@@ -302,31 +337,51 @@ class CodexService(
         _connectionState.value = ConnectionState.Paired
         _timeline.value = emptyList()
         activeTurnIdByThread.clear()
+        projectPathByThread.clear()
+        rpcMethodAliasCache.clear()
+        unavailableMethodKeyCache.clear()
         AppLogger.info(LOG_TAG, "disconnect completed; connection state set back to PAIRED.")
         setStatus("Disconnected.", notify = true)
     }
 
-    suspend fun startThread() {
+    suspend fun startThread(preferredProjectPath: String? = null) {
         ensureConnected()
+        val normalizedPreferredPath = normalizeProjectPath(preferredProjectPath)
+        val params = if (normalizedPreferredPath == null) {
+            JsonObject(emptyMap())
+        } else {
+            JsonObject(
+                mapOf(
+                    "cwd" to JsonPrimitive(normalizedPreferredPath)
+                )
+            )
+        }
         val response = rpcTransport.request(
             method = "thread/start",
-            params = JsonObject(emptyMap())
+            params = params
         )
         throwIfRpcError(response, "thread/start")
         val resultObject = response.result as? JsonObject
             ?: throw IllegalStateException("thread/start result is missing.")
         val createdThread = resultObject["thread"] as? JsonObject
         val createdThreadId = createdThread?.string("id")
-        refreshThreads(silentStatus = true)
+        refreshThreads(silentStatus = true, includeTimeline = false)
         if (!createdThreadId.isNullOrBlank()) {
             openThread(createdThreadId, silentStatus = true)
-            setStatus("Created thread $createdThreadId via $activeTransportLabel.", notify = true)
+            setStatus(
+                if (normalizedPreferredPath != null) {
+                    "Created thread $createdThreadId in $normalizedPreferredPath via $activeTransportLabel."
+                } else {
+                    "Created thread $createdThreadId via $activeTransportLabel."
+                },
+                notify = true
+            )
         } else {
             setStatus("Created thread via $activeTransportLabel.", notify = true)
         }
     }
 
-    suspend fun refreshThreads(silentStatus: Boolean = false) {
+    suspend fun refreshThreads(silentStatus: Boolean = false, includeTimeline: Boolean = true) {
         ensureConnected()
         val response = rpcTransport.request(
             method = "thread/list",
@@ -343,6 +398,11 @@ class CodexService(
             ?: throw IllegalStateException("thread/list result is missing.")
         val parsedThreads = parser.parseThreadList(resultObject)
         _threads.value = parsedThreads
+        val parsedThreadIds = parsedThreads.map { it.id }.toSet()
+        projectPathByThread.keys.retainAll(parsedThreadIds)
+        parsedThreads.forEach { thread ->
+            updateThreadProjectPath(thread.id, thread.cwd)
+        }
 
         val selectedThreadId = _selectedThreadId.value
         val resolvedSelection = when {
@@ -353,12 +413,10 @@ class CodexService(
 
         _selectedThreadId.value = resolvedSelection
         if (resolvedSelection != null) {
-            val selectedThread = parsedThreads.firstOrNull { it.id == resolvedSelection }
-            val selectedThreadCwd = selectedThread?.cwd?.trim().orEmpty()
-            if (selectedThreadCwd.isNotEmpty()) {
-                _currentProjectPath.value = selectedThreadCwd
+            updateCurrentProjectPathForThread(resolvedSelection)
+            if (includeTimeline) {
+                openThread(resolvedSelection, silentStatus = true)
             }
-            openThread(resolvedSelection, silentStatus = true)
         } else {
             _timeline.value = emptyList()
         }
@@ -366,6 +424,12 @@ class CodexService(
         if (!silentStatus) {
             setStatus("Loaded ${parsedThreads.size} thread(s) via $activeTransportLabel.")
         }
+    }
+
+    suspend fun refreshActiveThreadTimeline(silentStatus: Boolean = true) {
+        ensureConnected()
+        val threadId = _selectedThreadId.value ?: return
+        openThread(threadId, silentStatus = silentStatus)
     }
 
     suspend fun openThread(threadId: String, silentStatus: Boolean = false) {
@@ -392,20 +456,27 @@ class CodexService(
             activeTurnIdByThread.remove(threadId)
         }
 
-        val selectedThreadCwd = _threads.value.firstOrNull { it.id == threadId }?.cwd?.trim().orEmpty()
-        if (selectedThreadCwd.isNotEmpty()) {
-            _currentProjectPath.value = selectedThreadCwd
-        }
+        val threadReadCwd = parseThreadReadCwd(resultObject)
+        updateThreadProjectPath(threadId, threadReadCwd)
+        updateCurrentProjectPathForThread(threadId)
 
         if (!silentStatus) {
             setStatus("Loaded ${parsedTimeline.size} timeline item(s) for $threadId via $activeTransportLabel.")
         }
     }
 
-    suspend fun sendTurnStart(inputText: String) {
+    suspend fun sendTurnStart(
+        inputText: String,
+        attachments: List<TurnImageAttachment> = emptyList(),
+        skillMentions: List<SkillSuggestion> = emptyList(),
+        fileMentions: List<String> = emptyList()
+    ) {
         ensureConnected()
         val normalizedInput = inputText.trim()
-        if (normalizedInput.isEmpty()) {
+        val normalizedAttachments = attachments
+            .map { it.dataUrl.trim() }
+            .filter { it.isNotEmpty() }
+        if (normalizedInput.isEmpty() && normalizedAttachments.isEmpty()) {
             return
         }
 
@@ -413,31 +484,175 @@ class CodexService(
             ?: threads.value.firstOrNull()?.id
             ?: throw IllegalStateException("No thread is selected.")
 
-        val response = rpcTransport.request(
-            method = "turn/start",
-            params = JsonObject(
-                mapOf(
-                    "threadId" to JsonPrimitive(threadId),
-                    "input" to JsonArray(
-                        listOf(
-                            JsonObject(
-                                mapOf(
-                                    "type" to JsonPrimitive("input_text"),
-                                    "text" to JsonPrimitive(normalizedInput)
-                                )
-                            )
-                        )
-                    )
+        val normalizedFileMentions = fileMentions
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        var imageUrlKey = "url"
+        var response = runCatching {
+            rpcTransport.request(
+                method = "turn/start",
+                params = buildTurnStartParams(
+                    threadId = threadId,
+                    normalizedInput = normalizedInput,
+                    imageUrlKey = imageUrlKey,
+                    normalizedAttachments = normalizedAttachments,
+                    skillMentions = skillMentions
                 )
             )
-        )
+        }.getOrElse { throw it }
+        val initialRpcError = response.error
+        if (initialRpcError != null
+            && normalizedAttachments.isNotEmpty()
+            && shouldRetryTurnStartWithImageUrlField(initialRpcError)
+        ) {
+            imageUrlKey = "image_url"
+            response = rpcTransport.request(
+                method = "turn/start",
+                params = buildTurnStartParams(
+                    threadId = threadId,
+                    normalizedInput = normalizedInput,
+                    imageUrlKey = imageUrlKey,
+                    normalizedAttachments = normalizedAttachments,
+                    skillMentions = skillMentions
+                )
+            )
+        }
         throwIfRpcError(response, "turn/start")
         val turnId = (response.result as? JsonObject)?.string("turnId", "turn_id")
         if (!turnId.isNullOrBlank()) {
             activeTurnIdByThread[threadId] = turnId
         }
         openThread(threadId, silentStatus = true)
+        if (normalizedFileMentions.isNotEmpty()) {
+            AppLogger.info(
+                LOG_TAG,
+                "turn/start sent with file mentions count=${normalizedFileMentions.size}."
+            )
+        }
         setStatus("Turn started on $threadId via $activeTransportLabel.", notify = true)
+    }
+
+    private fun shouldRetryTurnStartWithImageUrlField(rpcError: RpcError): Boolean {
+        val message = rpcError.message.lowercase()
+        if (!message.contains("image")) {
+            return false
+        }
+        return message.contains("image_url")
+            || message.contains("imageurl")
+            || message.contains("url")
+    }
+
+    private fun buildTurnStartParams(
+        threadId: String,
+        normalizedInput: String,
+        imageUrlKey: String,
+        normalizedAttachments: List<String>,
+        skillMentions: List<SkillSuggestion>
+    ): JsonObject {
+        val inputItems = mutableListOf<kotlinx.serialization.json.JsonElement>()
+
+        normalizedAttachments.forEach { dataUrl ->
+            inputItems += JsonObject(
+                mapOf(
+                    "type" to JsonPrimitive("image"),
+                    imageUrlKey to JsonPrimitive(dataUrl)
+                )
+            )
+        }
+
+        if (normalizedInput.isNotEmpty()) {
+            inputItems += JsonObject(
+                mapOf(
+                    "type" to JsonPrimitive("text"),
+                    "text" to JsonPrimitive(normalizedInput)
+                )
+            )
+        }
+
+        skillMentions
+            .filter { it.enabled }
+            .forEach { skill ->
+                val normalizedSkillId = skill.id.trim().ifEmpty { skill.name.trim() }
+                if (normalizedSkillId.isEmpty()) {
+                    return@forEach
+                }
+                val payload = mutableMapOf<String, kotlinx.serialization.json.JsonElement>(
+                    "type" to JsonPrimitive("skill"),
+                    "id" to JsonPrimitive(normalizedSkillId)
+                )
+                val normalizedName = skill.name.trim()
+                if (normalizedName.isNotEmpty()) {
+                    payload["name"] = JsonPrimitive(normalizedName)
+                }
+                val normalizedPath = skill.path?.trim().orEmpty()
+                if (normalizedPath.isNotEmpty()) {
+                    payload["path"] = JsonPrimitive(normalizedPath)
+                }
+                inputItems += JsonObject(payload)
+            }
+
+        return JsonObject(
+            mapOf(
+                "threadId" to JsonPrimitive(threadId),
+                "input" to JsonArray(inputItems)
+            )
+        )
+    }
+
+    suspend fun fuzzyFileSearch(
+        query: String,
+        roots: List<String>,
+        limit: Int = 8
+    ): List<FileAutocompleteMatch> {
+        ensureConnected()
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isEmpty()) {
+            return emptyList()
+        }
+        val normalizedRoots = roots
+            .mapNotNull(::normalizeProjectPath)
+            .distinct()
+        if (normalizedRoots.isEmpty()) {
+            return emptyList()
+        }
+
+        val params = JsonObject(
+            mapOf(
+                "query" to JsonPrimitive(normalizedQuery),
+                "roots" to JsonArray(normalizedRoots.map(::JsonPrimitive))
+            )
+        )
+        val responsePair = requestFirstAvailable(
+            methods = listOf("fuzzyFileSearch", "fuzzy_file_search"),
+            params = params
+        ) ?: return emptyList()
+        val result = responsePair.second.result as? JsonObject ?: return emptyList()
+        return parseFuzzyFileMatches(result, limit)
+    }
+
+    suspend fun listSkills(
+        cwds: List<String>,
+        forceReload: Boolean = false,
+        limit: Int = 12
+    ): List<SkillSuggestion> {
+        ensureConnected()
+        val normalizedCwds = cwds
+            .mapNotNull(::normalizeProjectPath)
+            .distinct()
+        val paramsMap = mutableMapOf<String, kotlinx.serialization.json.JsonElement>()
+        if (normalizedCwds.isNotEmpty()) {
+            paramsMap["cwds"] = JsonArray(normalizedCwds.map(::JsonPrimitive))
+            paramsMap["cwd"] = JsonPrimitive(normalizedCwds.first())
+        }
+        if (forceReload) {
+            paramsMap["forceReload"] = JsonPrimitive(true)
+        }
+        val responsePair = requestFirstAvailable(
+            methods = listOf("skills/list", "skill/list", "skills.list"),
+            params = JsonObject(paramsMap)
+        ) ?: return emptyList()
+        val result = responsePair.second.result as? JsonObject ?: return emptyList()
+        return parseSkills(result, limit)
     }
 
     suspend fun interruptActiveTurn() {
@@ -462,6 +677,14 @@ class CodexService(
         activeTurnIdByThread.remove(threadId)
         openThread(threadId, silentStatus = true)
         setStatus("Interrupted turn $resolvedTurnId on $threadId via $activeTransportLabel.", notify = true)
+    }
+
+    fun isThreadRunning(threadId: String?): Boolean {
+        val normalized = threadId?.trim().orEmpty()
+        if (normalized.isEmpty()) {
+            return false
+        }
+        return !activeTurnIdByThread[normalized].isNullOrBlank()
     }
 
     suspend fun registerPushToken(payload: PushRegistrationPayload) {
@@ -492,9 +715,17 @@ class CodexService(
 
     suspend fun refreshGitStatus(silentStatus: Boolean = false) {
         ensureConnected()
+        val gitScope = resolveSelectedThreadGitScopeOrNull()
+        if (gitScope == null) {
+            _gitStatusSummary.value = "Git status unavailable: select a thread bound to a local repo."
+            if (!silentStatus) {
+                setStatus("Select a repo-bound thread before running git actions.")
+            }
+            return
+        }
         val response = rpcTransport.request(
             method = "git/status",
-            params = JsonObject(emptyMap())
+            params = buildGitParams(gitScope)
         )
         throwIfRpcError(response, "git/status")
         val resultObject = response.result as? JsonObject
@@ -503,6 +734,7 @@ class CodexService(
 
         val repoRoot = parseGitRepoRoot(resultObject)
         if (!repoRoot.isNullOrBlank()) {
+            updateThreadProjectPath(gitScope.threadId, repoRoot)
             _currentProjectPath.value = repoRoot
         }
 
@@ -513,9 +745,17 @@ class CodexService(
 
     suspend fun refreshGitBranches(silentStatus: Boolean = false) {
         ensureConnected()
+        val gitScope = resolveSelectedThreadGitScopeOrNull()
+        if (gitScope == null) {
+            _gitBranches.value = emptyList()
+            if (!silentStatus) {
+                setStatus("Select a repo-bound thread before loading branches.")
+            }
+            return
+        }
         val response = rpcTransport.request(
             method = "git/branches",
-            params = JsonObject(emptyMap())
+            params = buildGitParams(gitScope)
         )
         throwIfRpcError(response, "git/branches")
         val resultObject = response.result as? JsonObject
@@ -534,12 +774,15 @@ class CodexService(
         if (normalizedBranch.isEmpty()) {
             throw IllegalArgumentException("Branch is required.")
         }
+        val gitScope = requireSelectedThreadGitScope()
 
         val response = rpcTransport.request(
             method = "git/checkout",
             params = JsonObject(
                 mapOf(
-                    "branch" to JsonPrimitive(normalizedBranch)
+                    "branch" to JsonPrimitive(normalizedBranch),
+                    "cwd" to JsonPrimitive(gitScope.cwd),
+                    "threadId" to JsonPrimitive(gitScope.threadId)
                 )
             )
         )
@@ -555,9 +798,10 @@ class CodexService(
 
     suspend fun gitPull() {
         ensureConnected()
+        val gitScope = requireSelectedThreadGitScope()
         val response = rpcTransport.request(
             method = "git/pull",
-            params = JsonObject(emptyMap())
+            params = buildGitParams(gitScope)
         )
         throwIfRpcError(response, "git/pull")
         refreshGitStatus(silentStatus = true)
@@ -570,9 +814,10 @@ class CodexService(
 
     suspend fun gitPush() {
         ensureConnected()
+        val gitScope = requireSelectedThreadGitScope()
         val response = rpcTransport.request(
             method = "git/push",
-            params = JsonObject(emptyMap())
+            params = buildGitParams(gitScope)
         )
         throwIfRpcError(response, "git/push")
         refreshGitStatus(silentStatus = true)
@@ -585,11 +830,18 @@ class CodexService(
 
     suspend fun gitCommit(message: String?) {
         ensureConnected()
+        val gitScope = requireSelectedThreadGitScope()
         val normalizedMessage = message?.trim().orEmpty()
         val params = if (normalizedMessage.isEmpty()) {
-            JsonObject(emptyMap())
+            buildGitParams(gitScope)
         } else {
-            JsonObject(mapOf("message" to JsonPrimitive(normalizedMessage)))
+            JsonObject(
+                mapOf(
+                    "message" to JsonPrimitive(normalizedMessage),
+                    "cwd" to JsonPrimitive(gitScope.cwd),
+                    "threadId" to JsonPrimitive(gitScope.threadId)
+                )
+            )
         }
         val response = rpcTransport.request(
             method = "git/commit",
@@ -789,7 +1041,8 @@ class CodexService(
         ensureConnected()
         val failedSections = mutableListOf<String>()
 
-        runCatching { refreshThreads(silentStatus = true) }.onFailure { failedSections += "threads" }
+        runCatching { refreshThreads(silentStatus = true, includeTimeline = false) }.onFailure { failedSections += "threads" }
+        runCatching { refreshActiveThreadTimeline(silentStatus = true) }.onFailure { failedSections += "timeline" }
         runCatching { refreshGitStatus(silentStatus = true) }.onFailure { failedSections += "git-status" }
         runCatching { refreshGitBranches(silentStatus = true) }.onFailure { failedSections += "git-branches" }
         runCatching { refreshRateLimitInfo(silentStatus = true) }.onFailure { failedSections += "rate-limits" }
@@ -848,6 +1101,67 @@ class CodexService(
         return newestRunningTurnId
     }
 
+    private data class GitScope(
+        val threadId: String,
+        val cwd: String
+    )
+
+    private fun parseThreadReadCwd(result: JsonObject): String? {
+        val threadObject = result["thread"] as? JsonObject
+        val threadScoped = threadObject?.string("cwd", "current_working_directory", "working_directory")
+        if (!threadScoped.isNullOrBlank()) {
+            return threadScoped
+        }
+        return result.string("cwd", "current_working_directory", "working_directory")
+    }
+
+    private fun updateThreadProjectPath(threadId: String, candidatePath: String?) {
+        val normalized = normalizeProjectPath(candidatePath) ?: return
+        projectPathByThread[threadId] = normalized
+    }
+
+    private fun updateCurrentProjectPathForThread(threadId: String) {
+        val scopedPath = projectPathByThread[threadId]
+            ?: _threads.value.firstOrNull { it.id == threadId }?.cwd
+        val normalized = normalizeProjectPath(scopedPath) ?: return
+        _currentProjectPath.value = normalized
+    }
+
+    private fun normalizeProjectPath(candidatePath: String?): String? {
+        val trimmed = candidatePath?.trim().orEmpty()
+        if (trimmed.isEmpty()) {
+            return null
+        }
+        if (trimmed == "Project path not resolved.") {
+            return null
+        }
+        return trimmed
+    }
+
+    private fun resolveSelectedThreadGitScopeOrNull(): GitScope? {
+        val threadId = _selectedThreadId.value ?: return null
+        val scopedPath = projectPathByThread[threadId]
+            ?: _threads.value.firstOrNull { it.id == threadId }?.cwd
+        val normalizedPath = normalizeProjectPath(scopedPath) ?: return null
+        projectPathByThread[threadId] = normalizedPath
+        _currentProjectPath.value = normalizedPath
+        return GitScope(threadId = threadId, cwd = normalizedPath)
+    }
+
+    private fun requireSelectedThreadGitScope(): GitScope {
+        return resolveSelectedThreadGitScopeOrNull()
+            ?: throw IllegalStateException("Select a thread bound to a local repository first.")
+    }
+
+    private fun buildGitParams(gitScope: GitScope): JsonObject {
+        return JsonObject(
+            mapOf(
+                "cwd" to JsonPrimitive(gitScope.cwd),
+                "threadId" to JsonPrimitive(gitScope.threadId)
+            )
+        )
+    }
+
     private fun parseGitStatusSummary(result: JsonObject): String {
         val statusObject = (result["status"] as? JsonObject) ?: result
         val branch = statusObject.string("branch", "currentBranch", "current_branch") ?: "unknown"
@@ -889,6 +1203,67 @@ class CodexService(
                 else -> null
             }
         }.distinct()
+    }
+
+    private fun parseFuzzyFileMatches(result: JsonObject, limit: Int): List<FileAutocompleteMatch> {
+        val rootArray = (result["files"] as? JsonArray)
+            ?: (result["data"] as? JsonArray)
+            ?: (result["items"] as? JsonArray)
+            ?: JsonArray(emptyList())
+
+        return rootArray.mapNotNull { element ->
+            val objectValue = element as? JsonObject ?: return@mapNotNull null
+            val rawPath = objectValue.string("path", "relativePath", "filePath", "fullPath")
+                ?: return@mapNotNull null
+            val normalizedPath = rawPath.trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val fileName = objectValue.string("fileName", "name")
+                ?: normalizedPath.substringAfterLast('/').substringAfterLast('\\')
+            if (fileName.isBlank()) {
+                return@mapNotNull null
+            }
+            FileAutocompleteMatch(path = normalizedPath, fileName = fileName)
+        }
+            .distinctBy { it.path.lowercase() }
+            .take(limit.coerceAtLeast(1))
+    }
+
+    private fun parseSkills(result: JsonObject, limit: Int): List<SkillSuggestion> {
+        val bucketedSkills = (result["data"] as? JsonArray)?.flatMap { bucketElement ->
+            val bucket = bucketElement as? JsonObject ?: return@flatMap emptyList()
+            ((bucket["skills"] as? JsonArray) ?: JsonArray(emptyList())).toList()
+        } ?: emptyList()
+
+        val directSkills = (result["skills"] as? JsonArray)
+            ?: (result["items"] as? JsonArray)
+            ?: JsonArray(emptyList())
+
+        val rawSkills = if (bucketedSkills.isNotEmpty()) {
+            bucketedSkills
+        } else {
+            directSkills.toList()
+        }
+
+        return rawSkills.mapNotNull { element ->
+            val skillObject = element as? JsonObject ?: return@mapNotNull null
+            val name = skillObject.string("name", "id")?.trim().orEmpty()
+            if (name.isEmpty()) {
+                return@mapNotNull null
+            }
+            val id = skillObject.string("id", "name")?.trim().orEmpty().ifEmpty { name }
+            SkillSuggestion(
+                id = id,
+                name = name,
+                description = skillObject.string("description", "summary"),
+                path = skillObject.string("path"),
+                enabled = skillObject.bool("enabled", "isEnabled") ?: true
+            )
+        }
+            .groupBy { it.name.lowercase() }
+            .mapNotNull { (_, bucket) ->
+                bucket.firstOrNull { it.enabled } ?: bucket.firstOrNull()
+            }
+            .sortedBy { it.name.lowercase() }
+            .take(limit.coerceAtLeast(1))
     }
 
     private fun parseModelList(result: JsonObject): List<String> {
@@ -1028,19 +1403,60 @@ class CodexService(
         methods: List<String>,
         params: JsonObject = JsonObject(emptyMap())
     ): Pair<String, RpcMessage>? {
-        for (method in methods) {
+        if (methods.isEmpty()) {
+            return null
+        }
+
+        val cacheKey = methods.joinToString("|")
+        if (unavailableMethodKeyCache.contains(cacheKey)) {
+            return null
+        }
+        val cachedMethod = rpcMethodAliasCache[cacheKey]
+        val orderedMethods = buildList {
+            if (!cachedMethod.isNullOrBlank() && methods.contains(cachedMethod)) {
+                add(cachedMethod)
+            }
+            methods.forEach { method ->
+                if (method != cachedMethod) {
+                    add(method)
+                }
+            }
+        }
+
+        for (method in orderedMethods) {
             val response = rpcTransport.request(method = method, params = params)
             val rpcError = response.error
-            if (rpcError != null && rpcError.code == -32601) {
+            if (rpcError != null && isMethodUnavailableError(rpcError)) {
+                if (rpcMethodAliasCache[cacheKey] == method) {
+                    rpcMethodAliasCache.remove(cacheKey)
+                }
                 AppLogger.debug(LOG_TAG, "RPC method not found on relay: $method")
                 continue
             }
             throwIfRpcError(response, method)
+            rpcMethodAliasCache[cacheKey] = method
+            unavailableMethodKeyCache.remove(cacheKey)
             AppLogger.debug(LOG_TAG, "RPC method succeeded: $method")
             return method to response
         }
+        rpcMethodAliasCache.remove(cacheKey)
+        unavailableMethodKeyCache.add(cacheKey)
         AppLogger.info(LOG_TAG, "No candidate methods were available: ${methods.joinToString(",")}")
         return null
+    }
+
+    private fun isMethodUnavailableError(rpcError: RpcError): Boolean {
+        if (rpcError.code == -32601) {
+            return true
+        }
+        if (rpcError.code != -32600) {
+            return false
+        }
+        val message = rpcError.message.lowercase()
+        return message.contains("unknown variant")
+            || message.contains("unknown method")
+            || message.contains("method not found")
+            || message.contains("unsupported method")
     }
 
     private fun throwIfRpcError(response: RpcMessage, method: String) {

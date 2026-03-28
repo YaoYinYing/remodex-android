@@ -68,6 +68,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppLogger.initialize(applicationContext)
         service = CodexService(
             pairingStore = SharedPreferencesPairingStateStore(applicationContext)
         )
@@ -76,6 +77,7 @@ class MainActivity : ComponentActivity() {
         observeServiceEvents()
         registerDebugPairingImportReceiver()
         handleDebugPairingImportFromIntent(intent)
+        attemptStartupReconnectIfPaired()
         setContent {
             RemodexApp(
                 service = service,
@@ -268,6 +270,18 @@ class MainActivity : ComponentActivity() {
                         AppLogger.error(LOG_TAG, "DEBUG_IMPORT_PAIRING connectLive failed.", error)
                     }
             }
+        }
+    }
+
+    private fun attemptStartupReconnectIfPaired() {
+        if (service.connectionState.value != com.remodex.mobile.service.ConnectionState.Paired) {
+            return
+        }
+        lifecycleScope.launch {
+            runCatching { service.connectLive() }
+                .onFailure { error ->
+                    AppLogger.warn(LOG_TAG, "Startup reconnect failed; keeping saved pairing.", error)
+                }
         }
     }
 }

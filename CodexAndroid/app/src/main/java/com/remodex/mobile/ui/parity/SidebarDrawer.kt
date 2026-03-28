@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -19,14 +21,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.remodex.mobile.model.ThreadSummary
 import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
 
 @Composable
 fun SidebarDrawerContent(
-    todos: List<WebsiteTodo>,
-    todoStates: Map<String, TodoState>,
+    threads: List<ThreadSummary>,
+    selectedThreadId: String?,
+    currentProjectPath: String,
+    onOpenThread: (String) -> Unit,
+    onStartThread: (String?) -> Unit,
     rateLimitInfo: String,
     ciStatus: String,
     notificationsEnabled: Boolean,
@@ -37,7 +43,6 @@ fun SidebarDrawerContent(
     onRequestNotificationPermission: () -> Unit,
     autoRefreshEnabled: Boolean,
     onAutoRefreshChanged: (Boolean) -> Unit,
-    onAdvanceTodo: () -> Unit,
     onRefreshWorkspace: () -> Unit,
     loggerLevel: LoggerLevel,
     loggerMaxLines: Int,
@@ -48,6 +53,15 @@ fun SidebarDrawerContent(
     onDisconnect: () -> Unit
 ) {
     var loggerLinesInput by remember { mutableStateOf(loggerMaxLines.toString()) }
+    var threadSearchQuery by remember { mutableStateOf("") }
+    val threadGroups = remember(threads, threadSearchQuery) {
+        groupThreadsByProject(threads, threadSearchQuery)
+    }
+    val currentProjectGroupPath = currentProjectPath
+        .takeUnless { it == "Project path not resolved." }
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
     LaunchedEffect(loggerMaxLines) {
         loggerLinesInput = loggerMaxLines.toString()
     }
@@ -55,6 +69,7 @@ fun SidebarDrawerContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -65,34 +80,60 @@ fun SidebarDrawerContent(
         )
 
         SectionCard(
-            title = "Parity Checklist",
-            subtitle = "Pinned iOS website feature mapping."
+            title = "Chats",
+            subtitle = "Grouped by project path."
         ) {
-            todos.forEach { todo ->
-                TodoRow(todo = todo, state = todoStates[todo.id] ?: TodoState.TODO)
+            OutlinedTextField(
+                value = threadSearchQuery,
+                onValueChange = { threadSearchQuery = it },
+                label = { Text("Search chats") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { onStartThread(currentProjectGroupPath) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("New in Current Project")
+                }
+                OutlinedButton(
+                    onClick = { onStartThread(null) },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("New Chat")
+                }
             }
-            Button(
-                onClick = onAdvanceTodo,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Advance Next TODO")
-            }
-        }
 
-        SectionCard(
-            title = "iOS Component Map",
-            subtitle = "One-to-one module parity tracker."
-        ) {
-            ComponentParityChecklist.forEach { item ->
+            if (threadGroups.isEmpty()) {
                 Text(
-                    text = "${item.component}: ${item.status.name.lowercase()}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    text = item.iosReference,
-                    style = MaterialTheme.typography.labelSmall,
+                    text = "No chats found.",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            } else {
+                threadGroups.forEach { group ->
+                    Text(
+                        text = "${group.label} (${group.threads.size})",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (group.projectPath != null) {
+                        OutlinedButton(
+                            onClick = { onStartThread(group.projectPath) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("New Chat in ${group.label}")
+                        }
+                    }
+                    group.threads.take(8).forEach { thread ->
+                        ThreadRow(
+                            thread = thread,
+                            isSelected = selectedThreadId == thread.id,
+                            onClick = { onOpenThread(thread.id) }
+                        )
+                    }
+                }
             }
         }
 

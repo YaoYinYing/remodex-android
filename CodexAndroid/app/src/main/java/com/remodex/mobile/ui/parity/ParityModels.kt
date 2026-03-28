@@ -65,7 +65,7 @@ val ComponentParityChecklist = listOf(
     ComponentParityItem("Onboarding", "OnboardingView + step pages", TodoState.DONE),
     ComponentParityItem("Pairing/Connect", "QR scanner + pairing shell", TodoState.DONE),
     ComponentParityItem("Home Empty", "HomeEmptyStateView", TodoState.IN_PROGRESS),
-    ComponentParityItem("Sidebar", "SidebarView + grouped thread rows", TodoState.IN_PROGRESS),
+    ComponentParityItem("Sidebar", "SidebarView + grouped thread rows", TodoState.DONE),
     ComponentParityItem("Turn Composer", "TurnComposerView + bottom bar", TodoState.IN_PROGRESS),
     ComponentParityItem("Timeline", "TurnTimelineView", TodoState.IN_PROGRESS),
     ComponentParityItem("Settings", "SettingsView runtime defaults", TodoState.DONE),

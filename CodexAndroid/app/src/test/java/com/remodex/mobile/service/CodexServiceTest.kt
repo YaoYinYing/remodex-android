@@ -21,6 +21,7 @@ class CodexServiceTest {
         )
 
         service.connectWithFixture()
+        service.refreshActiveThreadTimeline(silentStatus = true)
 
         assertEquals(ConnectionState.Connected, service.connectionState.value)
         assertTrue(service.threads.value.isNotEmpty())
@@ -48,6 +49,29 @@ class CodexServiceTest {
         assertTrue(afterTimeline.size > beforeSize)
         assertTrue(afterTimeline.any { it.text.contains("Validate composer parity path.") })
         assertTrue(afterTimeline.any { it.text.contains("Fixture reply") })
+    }
+
+    @Test
+    fun sendTurnStartAllowsAttachmentOnlyPayload() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        service.sendTurnStart(
+            inputText = "",
+            attachments = listOf(TurnImageAttachment("data:image/jpeg;base64,ZmFrZQ==", "fake.jpg"))
+        )
+
+        assertTrue(service.status.value.contains("Turn started"))
+        assertTrue(service.timeline.value.isNotEmpty())
     }
 
     @Test
@@ -200,6 +224,29 @@ class CodexServiceTest {
     }
 
     @Test
+    fun gitDoesNotFallbackToGlobalPathWhenThreadIsUnbound() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        // Fixture thread-gamma intentionally has no cwd, so git must remain unavailable for it.
+        service.openThread("thread-gamma", silentStatus = true)
+        service.refreshGitStatus(silentStatus = true)
+
+        assertTrue(
+            service.gitStatusSummary.value.contains("Git status unavailable: select a thread bound to a local repo.")
+        )
+    }
+
+    @Test
     fun refreshWorkflowSignalsInFixtureMode() = runBlocking {
         val service = CodexService()
         service.rememberPairing(
@@ -246,6 +293,52 @@ class CodexServiceTest {
 
         assertEquals("gpt-5.4-mini", service.selectedModel.value)
         assertTrue(service.pendingPermissions.value.size < beforeCount)
+    }
+
+    @Test
+    fun startThreadBindsPreferredProjectPathInFixtureMode() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        val preferredPath = "/Users/yyy/Documents/protein_design/remodex/CodexAndroid"
+        service.startThread(preferredProjectPath = preferredPath)
+
+        val selectedId = service.selectedThreadId.value ?: error("Expected selected thread.")
+        val selectedThread = service.threads.value.firstOrNull { it.id == selectedId }
+            ?: error("Expected created thread in list.")
+        assertEquals(preferredPath, selectedThread.cwd)
+    }
+
+    @Test
+    fun fuzzyFileAndSkillsSourcesReturnFixtureData() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+
+        val files = service.fuzzyFileSearch(query = "workspace", roots = listOf("/Users/yyy/Documents/protein_design/remodex"))
+        val skills = service.listSkills(cwds = listOf("/Users/yyy/Documents/protein_design/remodex"))
+
+        assertTrue(files.isNotEmpty())
+        assertTrue(files.any { it.fileName.contains("Workspace", ignoreCase = true) })
+        assertTrue(skills.isNotEmpty())
+        assertTrue(skills.any { it.name == "openai-docs" })
     }
 
     private class InMemoryPairingStore(

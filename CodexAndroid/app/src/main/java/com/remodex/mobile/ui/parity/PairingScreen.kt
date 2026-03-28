@@ -47,7 +47,6 @@ fun PairingScreen(
     notificationsEnabled: Boolean,
     onRequestNotificationPermission: () -> Unit,
     onRememberPairing: () -> Unit,
-    onConnectDemo: () -> Unit,
     onConnectLive: () -> Unit,
     onScannedPairing: (PairingPayload) -> Unit,
     onHeaderTap: () -> Unit
@@ -172,15 +171,9 @@ fun PairingScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         OutlinedButton(
                             onClick = { showManualEntry = !showManualEntry },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(if (showManualEntry) "Hide Manual Entry" else "Enter Manually")
-                        }
-                        OutlinedButton(
-                            onClick = onConnectDemo,
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Connect Demo")
                         }
                     }
                 }

@@ -1,5 +1,6 @@
 package com.remodex.mobile.service.logging
 
+import android.content.Context
 import android.util.Log
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,12 +38,28 @@ object AppLogger {
     private val lock = Any()
     private val nextId = AtomicLong(1)
     private val buffer = ArrayDeque<LoggerEntry>()
+    private var databaseStore: LoggerDatabaseStore? = null
 
     private val _settings = MutableStateFlow(LoggerSettings())
     val settings: StateFlow<LoggerSettings> = _settings
 
     private val _entries = MutableStateFlow<List<LoggerEntry>>(emptyList())
     val entries: StateFlow<List<LoggerEntry>> = _entries
+
+    fun initialize(context: Context) {
+        synchronized(lock) {
+            if (databaseStore != null) {
+                return
+            }
+            databaseStore = LoggerDatabaseStore(context)
+            val restored = databaseStore?.loadRecent(_settings.value.maxLines).orEmpty()
+            buffer.clear()
+            buffer.addAll(restored)
+            val highestId = restored.maxOfOrNull { it.id } ?: 0L
+            nextId.set(highestId + 1L)
+            _entries.value = buffer.toList()
+        }
+    }
 
     fun configure(level: LoggerLevel? = null, maxLines: Int? = null) {
         synchronized(lock) {
@@ -53,6 +70,7 @@ object AppLogger {
             )
             _settings.value = resolved
             trimBuffer(resolved.maxLines)
+            databaseStore?.pruneToMaxLines(resolved.maxLines)
             _entries.value = buffer.toList()
         }
     }
@@ -60,6 +78,8 @@ object AppLogger {
     fun clear() {
         synchronized(lock) {
             buffer.clear()
+            nextId.set(1)
+            databaseStore?.clear()
             _entries.value = emptyList()
         }
     }
@@ -98,28 +118,37 @@ object AppLogger {
                 }
             }
         }
+        val redactedMessage = SensitiveLogRedactor.redact(normalizedMessage)
 
+        var entry = LoggerEntry(
+            id = nextId.getAndIncrement(),
+            timestampMillis = System.currentTimeMillis(),
+            level = level,
+            tag = normalizedTag,
+            message = redactedMessage
+        )
         synchronized(lock) {
-            buffer.addLast(
-                LoggerEntry(
-                    id = nextId.getAndIncrement(),
-                    timestampMillis = System.currentTimeMillis(),
-                    level = level,
-                    tag = normalizedTag,
-                    message = normalizedMessage
-                )
-            )
+            val persistedId = databaseStore?.insert(entry)
+            if (persistedId != null && persistedId > 0L) {
+                entry = entry.copy(id = persistedId)
+                if (persistedId >= nextId.get()) {
+                    nextId.set(persistedId + 1)
+                }
+            }
+
+            buffer.addLast(entry)
             trimBuffer(_settings.value.maxLines)
+            databaseStore?.pruneToMaxLines(_settings.value.maxLines)
             _entries.value = buffer.toList()
         }
 
         val logTag = "Remodex-$normalizedTag"
         runCatching {
             when (level) {
-                LoggerLevel.DEBUG -> Log.d(logTag, normalizedMessage, throwable)
-                LoggerLevel.INFO -> Log.i(logTag, normalizedMessage, throwable)
-                LoggerLevel.WARN -> Log.w(logTag, normalizedMessage, throwable)
-                LoggerLevel.ERROR -> Log.e(logTag, normalizedMessage, throwable)
+                LoggerLevel.DEBUG -> Log.d(logTag, redactedMessage)
+                LoggerLevel.INFO -> Log.i(logTag, redactedMessage)
+                LoggerLevel.WARN -> Log.w(logTag, redactedMessage)
+                LoggerLevel.ERROR -> Log.e(logTag, redactedMessage)
             }
         }
     }

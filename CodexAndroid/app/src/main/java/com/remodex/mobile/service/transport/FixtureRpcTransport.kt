@@ -161,7 +161,7 @@ class FixtureRpcTransport : RpcTransport {
             "initialized" -> fixtureInitialized()
             "thread/list" -> fixtureThreadList()
             "thread/read" -> fixtureThreadRead(params)
-            "thread/start" -> fixtureThreadStart()
+            "thread/start" -> fixtureThreadStart(params)
             "turn/start" -> fixtureTurnStart(params)
             "turn/interrupt" -> fixtureTurnInterrupt(params)
             "notifications/push/register" -> fixturePushRegister(params)
@@ -171,6 +171,11 @@ class FixtureRpcTransport : RpcTransport {
             "git/pull" -> fixtureGitPull()
             "git/push" -> fixtureGitPush()
             "git/commit" -> fixtureGitCommit(params)
+            "fuzzyFileSearch" -> fixtureFuzzyFileSearch(params)
+            "fuzzy_file_search" -> fixtureFuzzyFileSearch(params)
+            "skills/list" -> fixtureSkillsList(params)
+            "skill/list" -> fixtureSkillsList(params)
+            "skills.list" -> fixtureSkillsList(params)
             "rate_limit/status" -> fixtureRateLimitStatus()
             "models/list" -> fixtureModelList()
             "models/select" -> fixtureModelSelect(params)
@@ -333,16 +338,19 @@ class FixtureRpcTransport : RpcTransport {
         )
     }
 
-    private fun fixtureThreadStart(): RpcMessage {
+    private fun fixtureThreadStart(params: JsonObject): RpcMessage {
         consumeQuota(2)
         val nextIndex = threadSummaries.size + 1 + turnsByThread.size
         val threadId = "thread-$nextIndex"
+        val preferredCwd = (params["cwd"] as? JsonPrimitive)?.contentOrNull
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
         val thread = JsonObject(
             mapOf(
                 "id" to JsonPrimitive(threadId),
                 "title" to JsonPrimitive("New Android thread $nextIndex"),
                 "preview" to JsonPrimitive("Fresh thread started on Android"),
-                "cwd" to JsonPrimitive("/Users/yyy/Documents/protein_design/remodex"),
+                "cwd" to JsonPrimitive(preferredCwd ?: "/Users/yyy/Documents/protein_design/remodex"),
                 "updated_at" to JsonPrimitive(System.currentTimeMillis())
             )
         )
@@ -355,6 +363,95 @@ class FixtureRpcTransport : RpcTransport {
             result = JsonObject(
                 mapOf(
                     "thread" to thread
+                )
+            )
+        )
+    }
+
+    private fun fixtureFuzzyFileSearch(params: JsonObject): RpcMessage {
+        consumeQuota(1)
+        val query = (params["query"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty().lowercase()
+        val roots = (params["roots"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf(String::isNotEmpty) }
+            ?: emptyList()
+        val root = roots.firstOrNull() ?: "/Users/yyy/Documents/protein_design/remodex"
+        val candidates = listOf(
+            "$root/README.md",
+            "$root/AGENTS.md",
+            "$root/CodexAndroid/app/src/main/java/com/remodex/mobile/service/CodexService.kt",
+            "$root/CodexAndroid/app/src/main/java/com/remodex/mobile/ui/parity/WorkspaceScreen.kt",
+            "$root/phodex-bridge/src/git-handler.js"
+        )
+        val filtered = if (query.isEmpty()) {
+            candidates
+        } else {
+            candidates.filter { it.lowercase().contains(query) }
+        }
+        val files = filtered.map { path ->
+            JsonObject(
+                mapOf(
+                    "path" to JsonPrimitive(path),
+                    "fileName" to JsonPrimitive(path.substringAfterLast('/'))
+                )
+            )
+        }
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-fuzzy-file-search"),
+            result = JsonObject(
+                mapOf(
+                    "files" to JsonArray(files)
+                )
+            )
+        )
+    }
+
+    private fun fixtureSkillsList(params: JsonObject): RpcMessage {
+        consumeQuota(1)
+        val forceReload = (params["forceReload"] as? JsonPrimitive)?.contentOrNull == "true"
+        val skills = listOf(
+            JsonObject(
+                mapOf(
+                    "id" to JsonPrimitive("openai-docs"),
+                    "name" to JsonPrimitive("openai-docs"),
+                    "description" to JsonPrimitive("Look up official OpenAI docs."),
+                    "path" to JsonPrimitive("/Users/yyy/.codex/skills/.system/openai-docs/SKILL.md"),
+                    "enabled" to JsonPrimitive(true)
+                )
+            ),
+            JsonObject(
+                mapOf(
+                    "id" to JsonPrimitive("figma"),
+                    "name" to JsonPrimitive("figma"),
+                    "description" to JsonPrimitive("Use Figma MCP workflows."),
+                    "path" to JsonPrimitive("/Users/yyy/.codex/skills/figma/SKILL.md"),
+                    "enabled" to JsonPrimitive(true)
+                )
+            ),
+            JsonObject(
+                mapOf(
+                    "id" to JsonPrimitive("security-best-practices"),
+                    "name" to JsonPrimitive("security-best-practices"),
+                    "description" to JsonPrimitive("Security review helper."),
+                    "path" to JsonPrimitive("/Users/yyy/.codex/skills/security-best-practices/SKILL.md"),
+                    "enabled" to JsonPrimitive(!forceReload)
+                )
+            )
+        )
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-skills-list"),
+            result = JsonObject(
+                mapOf(
+                    "data" to JsonArray(
+                        listOf(
+                            JsonObject(
+                                mapOf(
+                                    "skills" to JsonArray(skills)
+                                )
+                            )
+                        )
+                    )
                 )
             )
         )

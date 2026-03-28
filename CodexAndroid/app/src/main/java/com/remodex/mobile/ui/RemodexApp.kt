@@ -6,8 +6,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -17,17 +15,13 @@ import androidx.compose.ui.platform.LocalContext
 import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.PairingPayload
-import com.remodex.mobile.service.ServiceEvent
 import com.remodex.mobile.service.logging.AppLogger
 import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.parity.LoggerScreen
 import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
 import com.remodex.mobile.ui.parity.PaywallScreen
-import com.remodex.mobile.ui.parity.TodoState
-import com.remodex.mobile.ui.parity.WebsiteFeatureTodos
 import com.remodex.mobile.ui.parity.WorkspaceScreen
-import com.remodex.mobile.ui.parity.advanceNextTodo
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
 import com.remodex.mobile.ui.theme.RemodexTheme
@@ -100,42 +94,27 @@ fun RemodexApp(
     val loggerLevel = LoggerLevel.fromStorage(loggerLevelRaw)
     val loggerEntries by AppLogger.entries.collectAsState()
     val loggerSettings by AppLogger.settings.collectAsState()
+    val initialPairing = remember(service) { service.currentPairing() }
 
-    var relayUrl by rememberSaveable { mutableStateOf("ws://127.0.0.1:8765/relay") }
-    var sessionId by rememberSaveable { mutableStateOf("session-demo-android") }
-    var macDeviceId by rememberSaveable { mutableStateOf("mac-demo") }
-    var macIdentityPublicKey by rememberSaveable { mutableStateOf("bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==") }
-    var expiresAt by rememberSaveable { mutableLongStateOf(System.currentTimeMillis() + 300_000L) }
+    var relayUrl by rememberSaveable {
+        mutableStateOf(initialPairing?.relayUrl ?: "ws://127.0.0.1:8765/relay")
+    }
+    var sessionId by rememberSaveable {
+        mutableStateOf(initialPairing?.sessionId ?: "")
+    }
+    var macDeviceId by rememberSaveable {
+        mutableStateOf(initialPairing?.macDeviceId ?: "")
+    }
+    var macIdentityPublicKey by rememberSaveable {
+        mutableStateOf(initialPairing?.macIdentityPublicKey ?: "")
+    }
+    var expiresAt by rememberSaveable {
+        mutableLongStateOf(initialPairing?.expiresAt ?: (System.currentTimeMillis() + 300_000L))
+    }
 
-    var pushToken by rememberSaveable { mutableStateOf("") }
     var checkoutBranch by rememberSaveable { mutableStateOf("") }
     var commitMessage by rememberSaveable { mutableStateOf("") }
     var composerInput by rememberSaveable { mutableStateOf("") }
-    var manualPermissionId by rememberSaveable { mutableStateOf("") }
-
-    val eventLog = remember { mutableStateListOf<ServiceEvent>() }
-    val todoStates = remember { mutableStateMapOf<String, TodoState>() }
-
-    LaunchedEffect(Unit) {
-        if (todoStates.isEmpty()) {
-            WebsiteFeatureTodos.forEach { todo ->
-                todoStates[todo.id] = when (todo.id) {
-                    "pairing", "workspace", "git", "refresh-notify" -> TodoState.DONE
-                    "task-steering" -> TodoState.IN_PROGRESS
-                    else -> TodoState.TODO
-                }
-            }
-        }
-    }
-
-    LaunchedEffect(service) {
-        service.events.collect { event ->
-            eventLog.add(0, event)
-            while (eventLog.size > 40) {
-                eventLog.removeAt(eventLog.lastIndex)
-            }
-        }
-    }
 
     LaunchedEffect(hasSeenOnboarding, hasProAccess, fontStyleRaw, toneModeRaw, loggerLevelRaw, loggerMaxLines) {
         prefs.edit()
@@ -150,6 +129,16 @@ fun RemodexApp(
 
     LaunchedEffect(loggerLevel, loggerMaxLines) {
         AppLogger.configure(level = loggerLevel, maxLines = loggerMaxLines)
+    }
+
+    LaunchedEffect(connectionState) {
+        service.currentPairing()?.let { pairing ->
+            relayUrl = pairing.relayUrl
+            sessionId = pairing.sessionId
+            macDeviceId = pairing.macDeviceId
+            macIdentityPublicKey = pairing.macIdentityPublicKey
+            expiresAt = pairing.expiresAt
+        }
     }
 
     val onHeaderTap: () -> Unit = {
@@ -222,11 +211,6 @@ fun RemodexApp(
                                 )
                             )
                         },
-                        onConnectDemo = {
-                            scope.launch {
-                                runCatching { service.connectWithFixture() }
-                            }
-                        },
                         onConnectLive = {
                             scope.launch {
                                 runCatching { service.connectLive() }
@@ -263,10 +247,6 @@ fun RemodexApp(
                         onCheckoutBranchChange = { checkoutBranch = it },
                         commitMessage = commitMessage,
                         onCommitMessageChange = { commitMessage = it },
-                        pushToken = pushToken,
-                        onPushTokenChange = { pushToken = it },
-                        manualPermissionId = manualPermissionId,
-                        onManualPermissionIdChange = { manualPermissionId = it },
                         threads = threads,
                         selectedThreadId = selectedThreadId,
                         timeline = timeline,
@@ -274,10 +254,6 @@ fun RemodexApp(
                         onComposerInputChange = { composerInput = it },
                         notificationsEnabled = notificationsEnabled,
                         onRequestNotificationPermission = onRequestNotificationPermission,
-                        eventLog = eventLog,
-                        todos = WebsiteFeatureTodos,
-                        todoStates = todoStates,
-                        onAdvanceTodo = { advanceNextTodo(todoStates) },
                         fontStyle = fontStyle,
                         toneMode = toneMode,
                         onFontStyleChanged = { style -> fontStyleRaw = style.storageValue },

@@ -14,9 +14,8 @@ import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
-import com.remodex.mobile.ui.parity.TodoState
-import com.remodex.mobile.ui.parity.WebsiteFeatureTodos
 import com.remodex.mobile.ui.parity.WorkspaceScreen
+import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
 import com.remodex.mobile.ui.theme.RemodexTheme
@@ -59,8 +58,9 @@ class ParityUiInstrumentationTest {
                     notificationsEnabled = true,
                     onRequestNotificationPermission = {},
                     onRememberPairing = {},
-                    onConnectDemo = {},
-                    onConnectLive = {}
+                    onConnectLive = {},
+                    onScannedPairing = {},
+                    onHeaderTap = {}
                 )
             }
         }
@@ -71,7 +71,6 @@ class ParityUiInstrumentationTest {
     @Test
     fun workspaceDrawerAndRefreshStripAreInteractive() {
         val service = CodexService()
-        val todoStates = WebsiteFeatureTodos.associate { it.id to TodoState.TODO }.toMutableMap()
 
         composeRule.setContent {
             RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_LIGHT) {
@@ -91,10 +90,6 @@ class ParityUiInstrumentationTest {
                     onCheckoutBranchChange = {},
                     commitMessage = "",
                     onCommitMessageChange = {},
-                    pushToken = "",
-                    onPushTokenChange = {},
-                    manualPermissionId = "",
-                    onManualPermissionIdChange = {},
                     threads = emptyList(),
                     selectedThreadId = null,
                     timeline = emptyList(),
@@ -102,14 +97,15 @@ class ParityUiInstrumentationTest {
                     onComposerInputChange = {},
                     notificationsEnabled = true,
                     onRequestNotificationPermission = {},
-                    eventLog = emptyList(),
-                    todos = WebsiteFeatureTodos,
-                    todoStates = todoStates,
-                    onAdvanceTodo = {},
                     fontStyle = AppFontStyle.GEIST,
                     toneMode = AppToneMode.FORCE_LIGHT,
                     onFontStyleChanged = {},
-                    onToneModeChanged = {}
+                    onToneModeChanged = {},
+                    loggerLevel = LoggerLevel.INFO,
+                    loggerMaxLines = 3000,
+                    onLoggerLevelChanged = {},
+                    onLoggerMaxLinesChanged = {},
+                    onHeaderTap = {}
                 )
             }
         }
