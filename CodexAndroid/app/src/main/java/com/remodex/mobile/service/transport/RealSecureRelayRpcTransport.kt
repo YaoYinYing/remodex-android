@@ -9,6 +9,7 @@ import com.remodex.mobile.service.secure.CodexSecureTransport
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -51,7 +52,8 @@ private const val HANDSHAKE_LABEL_CLIENT_AUTH = "client-auth"
 private const val REQUEST_TIMEOUT_MS = 20_000L
 private const val HANDSHAKE_TIMEOUT_MS = 12_000L
 private const val CONNECT_TIMEOUT_MS = 10_000L
-private const val OPEN_HANDSHAKE_ATTEMPTS = 2
+private const val OPEN_HANDSHAKE_ATTEMPTS = 5
+private const val OPEN_RETRY_DELAY_BASE_MS = 750L
 private const val LOG_TAG = "RelayTransport"
 
 class RealSecureRelayRpcTransport(
@@ -78,6 +80,9 @@ class RealSecureRelayRpcTransport(
 
     @Volatile
     private var secureSession: ActiveSecureSession? = null
+
+    @Volatile
+    private var lastSocketCloseCause: Throwable? = null
 
     private var controlMessages: Channel<JsonObject> = Channel(Channel.UNLIMITED)
     private val phoneIdentity: PhoneIdentity = createPhoneIdentity()
@@ -117,10 +122,12 @@ class RealSecureRelayRpcTransport(
                     if (attempt >= OPEN_HANDSHAKE_ATTEMPTS || !isRetryableOpenFailure(error)) {
                         throw error
                     }
+                    val retryDelayMs = OPEN_RETRY_DELAY_BASE_MS * attempt
                     AppLogger.warn(
                         LOG_TAG,
-                        "open() will retry after retryable failure on attempt $attempt."
+                        "open() will retry after retryable failure on attempt $attempt in ${retryDelayMs}ms."
                     )
+                    delay(retryDelayMs)
                 }
             }
 
@@ -233,6 +240,7 @@ class RealSecureRelayRpcTransport(
         pendingResponses.clear()
         secureSession = null
         isOpen = false
+        lastSocketCloseCause = null
     }
 
     private fun isRetryableOpenFailure(error: Throwable): Boolean {
@@ -256,6 +264,10 @@ class RealSecureRelayRpcTransport(
 
         val listener = object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (!isCurrentSocket(webSocket)) {
+                    AppLogger.debug(LOG_TAG, "Ignoring onOpen callback from stale websocket.")
+                    return
+                }
                 AppLogger.info(
                     LOG_TAG,
                     "WebSocket opened with HTTP ${response.code}. ${connectionTag()}"
@@ -264,20 +276,36 @@ class RealSecureRelayRpcTransport(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (!isCurrentSocket(webSocket)) {
+                    AppLogger.debug(LOG_TAG, "Ignoring onMessage callback from stale websocket.")
+                    return
+                }
                 processIncomingText(text)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (!isCurrentSocket(webSocket)) {
+                    AppLogger.debug(LOG_TAG, "Ignoring onClosed callback from stale websocket.")
+                    return
+                }
                 AppLogger.warn(LOG_TAG, "WebSocket closed code=$code reason=$reason. ${connectionTag()}")
-                handleSocketClosed(IllegalStateException("Relay socket closed: $code $reason"))
+                handleSocketClosed(webSocket, IllegalStateException("Relay socket closed: $code $reason"))
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                if (!isCurrentSocket(webSocket)) {
+                    AppLogger.debug(LOG_TAG, "Ignoring onClosing callback from stale websocket.")
+                    return
+                }
                 AppLogger.info(LOG_TAG, "WebSocket closing code=$code reason=$reason.")
                 webSocket.close(code, reason)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (!isCurrentSocket(webSocket)) {
+                    AppLogger.debug(LOG_TAG, "Ignoring onFailure callback from stale websocket.")
+                    return
+                }
                 val code = response?.code?.toString() ?: "n/a"
                 AppLogger.error(
                     LOG_TAG,
@@ -287,7 +315,7 @@ class RealSecureRelayRpcTransport(
                 if (!opened.isCompleted) {
                     opened.completeExceptionally(t)
                 } else {
-                    handleSocketClosed(t)
+                    handleSocketClosed(webSocket, t)
                 }
             }
         }
@@ -579,7 +607,11 @@ class RealSecureRelayRpcTransport(
         return withTimeout(HANDSHAKE_TIMEOUT_MS) {
             var matched: JsonObject? = null
             while (matched == null) {
-                val message = controlMessages.receive()
+                val next = controlMessages.receiveCatching()
+                if (next.isClosed) {
+                    throw lastSocketCloseCause ?: IllegalStateException("Relay socket closed before $expectedKind.")
+                }
+                val message = next.getOrNull() ?: continue
                 val kind = (message["kind"] as? JsonPrimitive)?.contentOrNull ?: continue
                 if (kind == "secureError") {
                     val secureError = json.decodeFromJsonElement<SecureErrorMessage>(message)
@@ -627,8 +659,22 @@ class RealSecureRelayRpcTransport(
         }
     }
 
-    private fun handleSocketClosed(cause: Throwable) {
+    private fun handleSocketClosed(socket: WebSocket, cause: Throwable) {
+        if (!isCurrentSocket(socket)) {
+            AppLogger.debug(LOG_TAG, "Skipping socket-close handling for stale websocket.")
+            return
+        }
         AppLogger.warn(LOG_TAG, "Socket/session closed. ${connectionTag()}", cause)
+        lastSocketCloseCause = cause
+        controlMessages.trySend(
+            JsonObject(
+                mapOf(
+                    "kind" to JsonPrimitive("secureError"),
+                    "code" to JsonPrimitive("socket_closed"),
+                    "message" to JsonPrimitive(cause.message ?: "Relay socket closed.")
+                )
+            )
+        )
         isOpen = false
         secureSession = null
         failPendingResponses(cause)
@@ -651,6 +697,7 @@ class RealSecureRelayRpcTransport(
         AppLogger.info(LOG_TAG, "Closing websocket. ${connectionTag()}")
         isOpen = false
         secureSession = null
+        lastSocketCloseCause = null
         runCatching { webSocket?.close(1000, "client_close") }
         webSocket = null
     }
@@ -772,6 +819,10 @@ class RealSecureRelayRpcTransport(
         } else {
             url.replace(pairing.sessionId, "<session>")
         }
+    }
+
+    private fun isCurrentSocket(socket: WebSocket): Boolean {
+        return webSocket === socket
     }
 
     private fun rpcIdKey(id: JsonElement?): String? {
