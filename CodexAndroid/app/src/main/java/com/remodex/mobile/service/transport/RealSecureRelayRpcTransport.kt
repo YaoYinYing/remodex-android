@@ -152,6 +152,24 @@ class RealSecureRelayRpcTransport(
         }
     }
 
+    override suspend fun notify(method: String, params: JsonObject) {
+        requestMutex.withLock {
+            if (!isOpen) {
+                AppLogger.info(LOG_TAG, "notify($method) opening transport lazily. ${connectionTag()}")
+                open()
+            }
+            val notification = RpcMessage(
+                jsonrpc = "2.0",
+                id = null,
+                method = method,
+                params = params
+            )
+            val payloadText = json.encodeToString(notification)
+            AppLogger.info(LOG_TAG, "rpc notification send method=$method. ${connectionTag()}")
+            sendEncryptedApplicationPayload(payloadText)
+        }
+    }
+
     private suspend fun requestInternal(
         method: String,
         params: JsonObject,

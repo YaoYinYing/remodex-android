@@ -1,6 +1,7 @@
 package com.remodex.mobile.service
 
 import com.remodex.mobile.model.RpcMessage
+import com.remodex.mobile.model.RpcError
 import com.remodex.mobile.model.ThreadSummary
 import com.remodex.mobile.model.TimelineEntry
 import com.remodex.mobile.service.logging.AppLogger
@@ -186,6 +187,7 @@ class CodexService(
             runCatching { rpcTransport.close() }
             rpcTransport = transport
             rpcTransport.open()
+            initializeSession()
             activeTransportLabel = modeLabel
             activeConnectionMode = connectionMode
             _connectionState.value = ConnectionState.Connected
@@ -205,6 +207,78 @@ class CodexService(
             AppLogger.error(LOG_TAG, "connect($modeLabel) failed.", error)
             _connectionState.value = ConnectionState.Failed(error.message ?: "Unknown connection failure.")
             setStatus("Connect failed: ${error.message ?: "unknown error"}", notify = true)
+        }
+    }
+
+    private suspend fun initializeSession() {
+        val modernParams = JsonObject(
+            mapOf(
+                "clientInfo" to JsonObject(
+                    mapOf(
+                        "name" to JsonPrimitive("codexmobile_android"),
+                        "title" to JsonPrimitive("Remodex"),
+                        "version" to JsonPrimitive("0.1.0")
+                    )
+                ),
+                "capabilities" to JsonObject(
+                    mapOf(
+                        "experimentalApi" to JsonPrimitive(true)
+                    )
+                )
+            )
+        )
+
+        val initializeResponse = rpcTransport.request(
+            method = "initialize",
+            params = modernParams
+        )
+        val initializeError = initializeResponse.error
+        if (initializeError != null) {
+            if (isAlreadyInitializedError(initializeError)) {
+                AppLogger.info(
+                    LOG_TAG,
+                    "initialize reported already initialized; treating as success."
+                )
+            } else if (shouldRetryInitializeWithoutCapabilities(initializeError)) {
+                AppLogger.warn(
+                    LOG_TAG,
+                    "initialize with capabilities failed; retrying with legacy params. code=${initializeError.code} message=${initializeError.message}"
+                )
+                val legacyResponse = rpcTransport.request(
+                    method = "initialize",
+                    params = JsonObject(
+                        mapOf(
+                            "clientInfo" to JsonObject(
+                                mapOf(
+                                    "name" to JsonPrimitive("codexmobile_android"),
+                                    "title" to JsonPrimitive("Remodex"),
+                                    "version" to JsonPrimitive("0.1.0")
+                                )
+                            )
+                        )
+                    )
+                )
+                val legacyError = legacyResponse.error
+                if (legacyError != null && !isAlreadyInitializedError(legacyError)) {
+                    throwIfRpcError(legacyResponse, "initialize")
+                }
+            } else {
+                throwIfRpcError(initializeResponse, "initialize")
+            }
+        }
+        AppLogger.info(LOG_TAG, "initialize completed for active relay session.")
+
+        runCatching {
+            rpcTransport.notify(
+                method = "initialized",
+                params = JsonObject(emptyMap())
+            )
+        }.onFailure { error ->
+            AppLogger.warn(
+                LOG_TAG,
+                "initialized notification failed non-fatally; continuing session startup.",
+                error
+            )
         }
     }
 
@@ -976,6 +1050,26 @@ class CodexService(
             "RPC error for method=$method code=${rpcError.code} message=${rpcError.message}"
         )
         throw IllegalStateException("$method failed (${rpcError.code}): ${rpcError.message}")
+    }
+
+    private fun shouldRetryInitializeWithoutCapabilities(rpcError: RpcError): Boolean {
+        if (rpcError.code != -32600 && rpcError.code != -32602) {
+            return false
+        }
+        val message = rpcError.message.lowercase()
+        if (!message.contains("capabilities") && !message.contains("experimentalapi")) {
+            return false
+        }
+        return message.contains("unknown")
+            || message.contains("unexpected")
+            || message.contains("unrecognized")
+            || message.contains("invalid")
+            || message.contains("unsupported")
+            || message.contains("field")
+    }
+
+    private fun isAlreadyInitializedError(rpcError: RpcError): Boolean {
+        return rpcError.message.lowercase().contains("already initialized")
     }
 
     private fun setStatus(

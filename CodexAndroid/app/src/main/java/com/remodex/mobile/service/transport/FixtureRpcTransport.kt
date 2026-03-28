@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 class FixtureRpcTransport : RpcTransport {
+    private var isInitialized: Boolean = false
     private var currentBranch: String = "remodex/android-parity"
     private var commitCounter: Int = 0
     private var rateLimitLimit: Int = 200
@@ -140,9 +141,24 @@ class FixtureRpcTransport : RpcTransport {
         // No-op for fixture mode.
     }
 
+    override suspend fun notify(method: String, params: JsonObject) {
+        delay(20)
+        if (method == "initialized") {
+            isInitialized = true
+        }
+    }
+
     override suspend fun request(method: String, params: JsonObject): RpcMessage {
         delay(60)
+        if (method == "initialize") {
+            isInitialized = true
+            return fixtureInitialize()
+        }
+        if (method != "initialized" && !isInitialized) {
+            return fixtureNotInitialized(method)
+        }
         return when (method) {
+            "initialized" -> fixtureInitialized()
             "thread/list" -> fixtureThreadList()
             "thread/read" -> fixtureThreadRead(params)
             "thread/start" -> fixtureThreadStart()
@@ -170,6 +186,38 @@ class FixtureRpcTransport : RpcTransport {
                 )
             )
         }
+    }
+
+    private fun fixtureInitialize(): RpcMessage {
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-initialize"),
+            result = JsonObject(
+                mapOf(
+                    "name" to JsonPrimitive("remodex-fixture-runtime"),
+                    "version" to JsonPrimitive("0.1.0")
+                )
+            )
+        )
+    }
+
+    private fun fixtureInitialized(): RpcMessage {
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-initialized"),
+            result = JsonObject(emptyMap())
+        )
+    }
+
+    private fun fixtureNotInitialized(method: String): RpcMessage {
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-$method"),
+            error = RpcError(
+                code = -32600,
+                message = "Not initialized"
+            )
+        )
     }
 
     private fun fixtureThreadList(): RpcMessage {

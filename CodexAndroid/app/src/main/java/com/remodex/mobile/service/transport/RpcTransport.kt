@@ -7,4 +7,5 @@ interface RpcTransport {
     suspend fun open()
     suspend fun close()
     suspend fun request(method: String, params: JsonObject = JsonObject(emptyMap())): RpcMessage
+    suspend fun notify(method: String, params: JsonObject = JsonObject(emptyMap()))
 }
