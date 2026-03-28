@@ -11,10 +11,14 @@ import com.remodex.mobile.service.transport.FixtureRpcTransport
 import com.remodex.mobile.service.transport.RealSecureRelayRpcTransport
 import com.remodex.mobile.service.transport.RpcTransport
 import com.remodex.mobile.service.transport.RpcTransportParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -133,6 +137,7 @@ class CodexService(
     private val locallyDeletedThreadIds = mutableSetOf<String>()
     private val rpcMethodAliasCache = mutableMapOf<String, String>()
     private val unavailableMethodKeyCache = mutableSetOf<String>()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var rpcTransport: RpcTransport = FixtureRpcTransport()
     private var activeTransportLabel: String = "none"
     private var activeConnectionMode: ConnectionMode = ConnectionMode.NONE
@@ -211,6 +216,7 @@ class CodexService(
         try {
             runCatching { rpcTransport.close() }
             rpcTransport = transport
+            bindTransportListener(rpcTransport)
             rpcMethodAliasCache.clear()
             unavailableMethodKeyCache.clear()
             rpcTransport.open()
@@ -319,6 +325,285 @@ class CodexService(
         }
     }
 
+    private fun bindTransportListener(transport: RpcTransport) {
+        transport.setServerMessageListener { message ->
+            serviceScope.launch {
+                runCatching {
+                    handleServerMessage(message)
+                }.onFailure { error ->
+                    AppLogger.warn(
+                        LOG_TAG,
+                        "Ignoring inbound server message failure method=${message.method.orEmpty()}",
+                        error
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun handleServerMessage(message: RpcMessage) {
+        val rawMethod = message.method?.trim().orEmpty()
+        if (rawMethod.isEmpty()) {
+            return
+        }
+        val method = normalizeIncomingMethodName(rawMethod)
+        val params = message.params as? JsonObject ?: JsonObject(emptyMap())
+        AppLogger.info(LOG_TAG, "Inbound server message method=$method")
+        when (method) {
+            "thread/started" -> handleThreadStartedNotification(params)
+            "thread/status/changed" -> handleThreadStatusChangedNotification(params)
+            "thread/name/updated" -> handleThreadNameUpdatedNotification(params)
+            "turn/started" -> handleTurnStartedNotification(params)
+            "turn/completed" -> handleTurnCompletedNotification(params)
+            "turn/failed" -> handleTurnFailedNotification(params)
+            "item/agentMessage/delta",
+            "codex/event/agent_message_content_delta",
+            "codex/event/agent_message_delta" -> handleAssistantDeltaNotification(params)
+            "codex/event/user_message" -> handleUserMessageNotification(params)
+        }
+    }
+
+    private fun normalizeIncomingMethodName(method: String): String {
+        val trimmed = method.trim()
+        if (trimmed == "item/agent_message/delta") {
+            return "item/agentMessage/delta"
+        }
+        return trimmed
+    }
+
+    private fun handleThreadStartedNotification(params: JsonObject) {
+        val threadObject = (params["thread"] as? JsonObject) ?: params
+        val parsedThread = parser.parseThreadSummaryObject(threadObject) ?: return
+        locallyDeletedThreadIds.remove(parsedThread.id)
+        locallyArchivedThreadIds.remove(parsedThread.id)
+        upsertThreadSummary(parsedThread)
+        updateThreadProjectPath(parsedThread.id, parsedThread.cwd)
+        if (_selectedThreadId.value == null && !parsedThread.isArchived) {
+            _selectedThreadId.value = parsedThread.id
+            updateCurrentProjectPathForThread(parsedThread.id)
+        }
+        setStatus("Thread ${parsedThread.displayTitle} started via $activeTransportLabel.")
+    }
+
+    private fun handleThreadStatusChangedNotification(params: JsonObject) {
+        val threadId = params.string("threadId", "thread_id", "id") ?: return
+        val status = params.string("status", "state")?.lowercase().orEmpty()
+        val archived = params.bool("archived", "isArchived", "is_archived")
+        if (archived == true || status == "archived") {
+            locallyArchivedThreadIds.add(threadId)
+        } else if (archived == false || status == "unarchived" || status == "resumed") {
+            locallyArchivedThreadIds.remove(threadId)
+        }
+
+        if (status == "resumed") {
+            setStatus("Thread $threadId resumed via $activeTransportLabel.")
+        } else if (status.isNotBlank()) {
+            setStatus("Thread $threadId status changed to $status via $activeTransportLabel.")
+        }
+
+        _threads.value = _threads.value.map { thread ->
+            if (thread.id == threadId) {
+                thread.copy(
+                    updatedAtMillis = System.currentTimeMillis(),
+                    isArchived = archived ?: (status == "archived")
+                )
+            } else {
+                thread
+            }
+        }.sortedWith(threadSummaryComparator())
+    }
+
+    private fun handleThreadNameUpdatedNotification(params: JsonObject) {
+        val threadId = params.string("threadId", "thread_id", "id") ?: return
+        val name = params.string("name", "title") ?: return
+        _threads.value = _threads.value.map { thread ->
+            if (thread.id == threadId) {
+                thread.copy(name = name, title = name, updatedAtMillis = System.currentTimeMillis())
+            } else {
+                thread
+            }
+        }.sortedWith(threadSummaryComparator())
+        setStatus("Renamed thread $threadId via $activeTransportLabel.")
+    }
+
+    private fun handleTurnStartedNotification(params: JsonObject) {
+        val threadId = resolveThreadIdFromNotification(params) ?: return
+        val turnId = params.string("turnId", "turn_id", "id") ?: return
+        activeTurnIdByThread[threadId] = turnId
+        updateThreadTimestamp(threadId)
+        setStatus("Turn started on $threadId via $activeTransportLabel.")
+    }
+
+    private fun handleTurnCompletedNotification(params: JsonObject) {
+        val threadId = resolveThreadIdFromNotification(params)
+        val turnId = params.string("turnId", "turn_id", "id")
+        clearActiveTurnState(threadId = threadId, turnId = turnId)
+        if (threadId != null) {
+            updateThreadTimestamp(threadId)
+        }
+        setStatus("Turn completed${threadId?.let { " on $it" } ?: ""} via $activeTransportLabel.")
+    }
+
+    private fun handleTurnFailedNotification(params: JsonObject) {
+        val threadId = resolveThreadIdFromNotification(params)
+        val turnId = params.string("turnId", "turn_id", "id")
+        clearActiveTurnState(threadId = threadId, turnId = turnId)
+        val message = params.string("message", "error", "reason")
+            ?: "Turn failed."
+        if (threadId != null) {
+            val entry = TimelineEntry(
+                id = "turn-failed-${turnId ?: System.currentTimeMillis()}",
+                threadId = threadId,
+                turnId = turnId,
+                type = "turnfailed",
+                role = com.remodex.mobile.model.TimelineRole.SYSTEM,
+                text = message
+            )
+            appendOrMergeTimelineEntry(entry = entry, append = false)
+            updateThreadPreviewAndTimestamp(threadId = threadId, preview = message)
+        }
+        setStatus("Turn failed: $message", notify = true)
+    }
+
+    private fun handleAssistantDeltaNotification(params: JsonObject) {
+        val threadId = resolveThreadIdFromNotification(params) ?: return
+        val turnId = params.string("turnId", "turn_id")
+        val text = extractNotificationText(params) ?: return
+        val itemId = params.string("itemId", "item_id", "id")
+            ?: "assistant-${threadId}-${turnId ?: "unknown"}"
+        val entry = TimelineEntry(
+            id = itemId,
+            threadId = threadId,
+            turnId = turnId,
+            type = "assistantmessage",
+            role = com.remodex.mobile.model.TimelineRole.ASSISTANT,
+            text = text
+        )
+        appendOrMergeTimelineEntry(entry = entry, append = true)
+        updateThreadPreviewAndTimestamp(threadId = threadId, preview = text)
+    }
+
+    private fun handleUserMessageNotification(params: JsonObject) {
+        val threadId = resolveThreadIdFromNotification(params) ?: return
+        val turnId = params.string("turnId", "turn_id")
+        val text = extractNotificationText(params) ?: return
+        val itemId = params.string("itemId", "item_id", "id")
+            ?: "user-${threadId}-${turnId ?: "unknown"}-${text.hashCode()}"
+        val entry = TimelineEntry(
+            id = itemId,
+            threadId = threadId,
+            turnId = turnId,
+            type = "usermessage",
+            role = com.remodex.mobile.model.TimelineRole.USER,
+            text = text
+        )
+        appendOrMergeTimelineEntry(entry = entry, append = false)
+        updateThreadPreviewAndTimestamp(threadId = threadId, preview = text)
+    }
+
+    private fun appendOrMergeTimelineEntry(entry: TimelineEntry, append: Boolean) {
+        if (_selectedThreadId.value != entry.threadId) {
+            return
+        }
+        val existingIndex = _timeline.value.indexOfFirst { item -> item.id == entry.id }
+        if (existingIndex >= 0) {
+            _timeline.value = _timeline.value.toMutableList().also { items ->
+                val existing = items[existingIndex]
+                items[existingIndex] = existing.copy(
+                    text = if (append) existing.text + entry.text else entry.text
+                )
+            }
+            return
+        }
+        _timeline.value = _timeline.value + entry
+    }
+
+    private fun upsertThreadSummary(thread: ThreadSummary) {
+        val updated = _threads.value.toMutableList()
+        val existingIndex = updated.indexOfFirst { it.id == thread.id }
+        if (existingIndex >= 0) {
+            updated[existingIndex] = thread
+        } else {
+            updated += thread
+        }
+        _threads.value = updated.sortedWith(
+            threadSummaryComparator()
+        )
+    }
+
+    private fun updateThreadTimestamp(threadId: String) {
+        _threads.value = _threads.value.map { thread ->
+            if (thread.id == threadId) {
+                thread.copy(updatedAtMillis = System.currentTimeMillis())
+            } else {
+                thread
+            }
+        }.sortedWith(threadSummaryComparator())
+    }
+
+    private fun updateThreadPreviewAndTimestamp(threadId: String, preview: String) {
+        _threads.value = _threads.value.map { thread ->
+            if (thread.id == threadId) {
+                thread.copy(
+                    preview = preview,
+                    updatedAtMillis = System.currentTimeMillis()
+                )
+            } else {
+                thread
+            }
+        }.sortedWith(threadSummaryComparator())
+    }
+
+    private fun clearActiveTurnState(threadId: String?, turnId: String?) {
+        if (!threadId.isNullOrBlank()) {
+            val activeTurnId = activeTurnIdByThread[threadId]
+            if (turnId.isNullOrBlank() || activeTurnId == turnId) {
+                activeTurnIdByThread.remove(threadId)
+            }
+        }
+        if (!turnId.isNullOrBlank()) {
+            activeTurnIdByThread.entries
+                .firstOrNull { (_, candidateTurnId) -> candidateTurnId == turnId }
+                ?.key
+                ?.let { key -> activeTurnIdByThread.remove(key) }
+        }
+    }
+
+    private fun resolveThreadIdFromNotification(params: JsonObject): String? {
+        params.string("threadId", "thread_id")?.let { return it }
+        val threadObject = params["thread"] as? JsonObject
+        threadObject?.string("id")?.let { return it }
+        val itemObject = params["item"] as? JsonObject
+        itemObject?.string("threadId", "thread_id")?.let { return it }
+        return _selectedThreadId.value
+    }
+
+    private fun extractNotificationText(params: JsonObject): String? {
+        params.string("text", "message", "delta")?.let { text ->
+            if (text.isNotBlank()) {
+                return text
+            }
+        }
+        val itemObject = params["item"] as? JsonObject
+        if (itemObject != null) {
+            parser.parseTimelineEntry(
+                threadId = resolveThreadIdFromNotification(params) ?: return null,
+                turnId = params.string("turnId", "turn_id"),
+                itemObject = itemObject
+            )?.text?.let { return it }
+        }
+        val content = params["content"] as? JsonArray ?: return null
+        return content.firstNotNullOfOrNull { element ->
+            val part = element as? JsonObject ?: return@firstNotNullOfOrNull null
+            part.string("text", "message", "delta")?.takeIf { it.isNotBlank() }
+        }
+    }
+
+    private fun threadSummaryComparator(): Comparator<ThreadSummary> {
+        return compareByDescending<ThreadSummary> { it.updatedAtMillis ?: Long.MIN_VALUE }
+            .thenBy { it.id }
+    }
+
     suspend fun reconnect() {
         AppLogger.info(LOG_TAG, "reconnect requested with mode=$activeConnectionMode.")
         when (activeConnectionMode) {
@@ -334,6 +619,7 @@ class CodexService(
 
     suspend fun disconnect() {
         AppLogger.info(LOG_TAG, "disconnect requested for mode=$activeConnectionMode.")
+        rpcTransport.setServerMessageListener(null)
         runCatching { rpcTransport.close() }
         activeConnectionMode = ConnectionMode.NONE
         _connectionState.value = ConnectionState.Paired
@@ -835,6 +1121,118 @@ class CodexService(
         ) ?: return emptyList()
         val result = responsePair.second.result as? JsonObject ?: return emptyList()
         return parseSkills(result, limit)
+    }
+
+    suspend fun turnSteer(inputText: String): Boolean {
+        ensureConnected()
+        val normalizedInput = inputText.trim()
+        if (normalizedInput.isEmpty()) {
+            throw IllegalArgumentException("Steer input is required.")
+        }
+        val threadId = _selectedThreadId.value ?: return false
+        val activeTurnId = activeTurnIdByThread[threadId]
+        val responsePair = requestFirstAvailable(
+            methods = listOf("turn/steer"),
+            params = JsonObject(
+                buildMap {
+                    put("threadId", JsonPrimitive(threadId))
+                    put("input", JsonPrimitive(normalizedInput))
+                    put("text", JsonPrimitive(normalizedInput))
+                    if (!activeTurnId.isNullOrBlank()) {
+                        put("turnId", JsonPrimitive(activeTurnId))
+                    }
+                }
+            )
+        ) ?: run {
+            setStatus("Turn steering unavailable from relay.")
+            return false
+        }
+        val steeredTurnId = (responsePair.second.result as? JsonObject)?.string("turnId", "turn_id")
+        if (!steeredTurnId.isNullOrBlank()) {
+            activeTurnIdByThread[threadId] = steeredTurnId
+        }
+        setStatus("Steered active turn on $threadId via $activeTransportLabel.", notify = true)
+        return true
+    }
+
+    suspend fun threadResume(threadId: String? = null): Boolean {
+        ensureConnected()
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: _selectedThreadId.value
+        val params = normalizedThreadId?.let {
+            JsonObject(mapOf("threadId" to JsonPrimitive(it)))
+        } ?: JsonObject(emptyMap())
+        val responsePair = requestFirstAvailable(
+            methods = listOf("thread/resume"),
+            params = params
+        ) ?: run {
+            setStatus("Thread resume unavailable from relay.")
+            return false
+        }
+        val resumedThread = (responsePair.second.result as? JsonObject)?.let { result ->
+            (result["thread"] as? JsonObject)?.let(parser::parseThreadSummaryObject)
+        }
+        if (resumedThread != null) {
+            upsertThreadSummary(resumedThread)
+            _selectedThreadId.value = resumedThread.id
+            updateCurrentProjectPathForThread(resumedThread.id)
+        }
+        setStatus("Resumed thread via $activeTransportLabel.", notify = true)
+        return true
+    }
+
+    suspend fun threadFork(threadId: String? = null): String? {
+        ensureConnected()
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: _selectedThreadId.value
+            ?: return null
+        val responsePair = requestFirstAvailable(
+            methods = listOf("thread/fork"),
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(normalizedThreadId)
+                )
+            )
+        ) ?: run {
+            setStatus("Thread fork unavailable from relay.")
+            return null
+        }
+        val resultObject = responsePair.second.result as? JsonObject ?: JsonObject(emptyMap())
+        val forkedThreadObject = resultObject["thread"] as? JsonObject
+        val parsedThread = forkedThreadObject?.let(parser::parseThreadSummaryObject)
+        if (parsedThread != null) {
+            upsertThreadSummary(parsedThread)
+            _selectedThreadId.value = parsedThread.id
+            updateCurrentProjectPathForThread(parsedThread.id)
+        }
+        val forkedThreadId = parsedThread?.id ?: resultObject.string("threadId", "thread_id")
+        if (!forkedThreadId.isNullOrBlank()) {
+            setStatus("Forked thread $forkedThreadId via $activeTransportLabel.", notify = true)
+        }
+        return forkedThreadId
+    }
+
+    suspend fun reviewStart(threadId: String? = null): Boolean {
+        ensureConnected()
+        val normalizedThreadId = threadId?.trim()?.takeIf { it.isNotEmpty() } ?: _selectedThreadId.value
+        val params = normalizedThreadId?.let {
+            JsonObject(mapOf("threadId" to JsonPrimitive(it)))
+        } ?: JsonObject(emptyMap())
+        val responsePair = requestFirstAvailable(
+            methods = listOf("review/start"),
+            params = params
+        ) ?: run {
+            setStatus("Review start unavailable from relay.")
+            return false
+        }
+        val reviewId = (responsePair.second.result as? JsonObject)?.string("reviewId", "review_id")
+        setStatus(
+            if (!reviewId.isNullOrBlank()) {
+                "Started review $reviewId via $activeTransportLabel."
+            } else {
+                "Started review via $activeTransportLabel."
+            },
+            notify = true
+        )
+        return true
     }
 
     suspend fun interruptActiveTurn() {

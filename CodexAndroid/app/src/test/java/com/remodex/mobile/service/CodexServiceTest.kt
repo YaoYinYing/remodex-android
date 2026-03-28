@@ -1,8 +1,13 @@
 package com.remodex.mobile.service
 
 import com.remodex.mobile.service.push.PushRegistrationPayload
+import com.remodex.mobile.ui.parity.ParityAcceptanceMatrix
+import com.remodex.mobile.ui.parity.TodoState
+import com.remodex.mobile.ui.parity.WebsiteFeatureTodos
+import com.remodex.mobile.ui.parity.advanceNextTodo
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -191,6 +196,7 @@ class CodexServiceTest {
             )
         )
         service.connectWithFixture()
+        service.openThread("thread-alpha", silentStatus = true)
         service.sendTurnStart("Run a turn and interrupt it.")
 
         service.interruptActiveTurn()
@@ -374,6 +380,41 @@ class CodexServiceTest {
         assertTrue(
             service.threads.value.none { it.id == "thread-alpha" }
         )
+    }
+
+    @Test
+    fun parityTodoGateContainsTwentyEntriesWithMatchingAcceptanceRows() {
+        assertEquals(20, WebsiteFeatureTodos.size)
+        assertEquals(20, ParityAcceptanceMatrix.size)
+        assertEquals(
+            WebsiteFeatureTodos.map { it.id }.toSet(),
+            ParityAcceptanceMatrix.map { it.todoId }.toSet()
+        )
+        assertTrue(WebsiteFeatureTodos.all { it.id.startsWith("TODO-") })
+        assertTrue(WebsiteFeatureTodos.all { it.iosReference.isNotBlank() })
+        assertTrue(WebsiteFeatureTodos.all { it.websiteClaim.isNotBlank() })
+        assertTrue(WebsiteFeatureTodos.all { it.defaultState == TodoState.DONE })
+        assertTrue(ParityAcceptanceMatrix.all { it.verification.isNotBlank() })
+        assertTrue(ParityAcceptanceMatrix.all { it.evidence.isNotBlank() })
+        assertTrue(ParityAcceptanceMatrix.all { it.defaultState == TodoState.DONE })
+    }
+
+    @Test
+    fun advanceNextTodoCompletesInProgressBeforeAdvancingNextTodo() {
+        val firstInProgress = WebsiteFeatureTodos.first()
+        val firstTodo = WebsiteFeatureTodos.drop(1).first()
+        val stateMap = mutableMapOf(
+            firstInProgress.id to TodoState.IN_PROGRESS,
+            firstTodo.id to TodoState.TODO
+        )
+        advanceNextTodo(stateMap)
+        assertEquals(TodoState.DONE, stateMap[firstInProgress.id])
+        assertEquals(TodoState.TODO, stateMap[firstTodo.id])
+
+        stateMap[firstInProgress.id] = TodoState.DONE
+        advanceNextTodo(stateMap)
+        assertEquals(TodoState.IN_PROGRESS, stateMap[firstTodo.id])
+        assertNotNull(stateMap[firstTodo.id])
     }
 
     private class InMemoryPairingStore(

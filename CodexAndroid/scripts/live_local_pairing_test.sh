@@ -13,6 +13,7 @@ ANDROID_DIR="${ROOT_DIR}/CodexAndroid"
 APK_PATH="${ANDROID_DIR}/app/build/outputs/apk/debug/app-debug.apk"
 APP_PACKAGE="com.remodex.mobile"
 PAIRING_SESSION_FILE="${REMODEX_DEVICE_STATE_DIR:-${HOME}/.remodex}/pairing-session.json"
+DEVICE_STATE_FILE="${REMODEX_DEVICE_STATE_DIR:-${HOME}/.remodex}/device-state.json"
 
 ADB_PATH="${ADB_PATH:-/Users/yyy/adb/adb}"
 DEVICE_SERIAL="${DEVICE_SERIAL:-}"
@@ -93,8 +94,10 @@ fi
 
 cleanup() {
   if [[ -n "${RUN_PID}" ]] && kill -0 "${RUN_PID}" >/dev/null 2>&1; then
+    pkill -TERM -P "${RUN_PID}" >/dev/null 2>&1 || true
     kill "${RUN_PID}" >/dev/null 2>&1 || true
     wait "${RUN_PID}" >/dev/null 2>&1 || true
+    pkill -KILL -P "${RUN_PID}" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT INT TERM
@@ -118,45 +121,78 @@ echo "[live-test] starting run-local-remodex on hostname=${RELAY_HOSTNAME} port=
 RUN_PID=$!
 
 start_epoch="$(date +%s)"
-echo "[live-test] waiting for fresh pairing session at ${PAIRING_SESSION_FILE}"
+echo "[live-test] waiting for pairing payload (session file or foreground QR log)"
 
-found_pairing="false"
-for _ in $(seq 1 40); do
-  if [[ -f "${PAIRING_SESSION_FILE}" ]]; then
-    created_epoch="$(node -e '
+pairing_json=""
+for _ in $(seq 1 60); do
+  pairing_json="$(node -e '
 const fs = require("fs");
-const file = process.argv[1];
-try {
-  const session = JSON.parse(fs.readFileSync(file, "utf8"));
-  const createdAt = Date.parse(session?.createdAt || "");
-  if (Number.isFinite(createdAt)) {
-    process.stdout.write(String(Math.floor(createdAt / 1000)));
+const pairingSessionFile = process.argv[1];
+const runLogFile = process.argv[2];
+const deviceStateFile = process.argv[3];
+const relayHostname = process.argv[4];
+const relayPort = process.argv[5];
+const startEpoch = Number.parseInt(process.argv[6], 10);
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
   }
-} catch {}
-' "${PAIRING_SESSION_FILE}")"
-    if [[ -n "${created_epoch}" && "${created_epoch}" -ge "${start_epoch}" ]]; then
-      found_pairing="true"
-      break
-    fi
+}
+
+if (fs.existsSync(pairingSessionFile)) {
+  const session = readJson(pairingSessionFile);
+  const createdAt = Date.parse(session?.createdAt || "");
+  if (session?.pairingPayload && Number.isFinite(createdAt) && createdAt >= startEpoch * 1000) {
+    process.stdout.write(JSON.stringify(session.pairingPayload));
+    process.exit(0);
+  }
+}
+
+if (!fs.existsSync(runLogFile) || !fs.existsSync(deviceStateFile)) {
+  process.exit(0);
+}
+
+const logText = fs.readFileSync(runLogFile, "utf8");
+const pick = (regex) => {
+  const match = logText.match(regex);
+  return match && match[1] ? match[1].trim() : "";
+};
+
+const sessionId = pick(/Session ID:\s*([^\r\n]+)/i);
+const macDeviceId = pick(/Device ID:\s*([^\r\n]+)/i);
+const expiresRaw = pick(/Expires:\s*([^\r\n]+)/i);
+const expiresAt = Date.parse(expiresRaw);
+const state = readJson(deviceStateFile);
+const macIdentityPublicKey = (state && state.macIdentityPublicKey) ? String(state.macIdentityPublicKey).trim() : "";
+
+if (!sessionId || !macDeviceId || !macIdentityPublicKey || !Number.isFinite(expiresAt)) {
+  process.exit(0);
+}
+
+const pairingPayload = {
+  v: 2,
+  relay: `ws://${relayHostname}:${relayPort}/relay`,
+  sessionId,
+  macDeviceId,
+  macIdentityPublicKey,
+  expiresAt
+};
+process.stdout.write(JSON.stringify(pairingPayload));
+' "${PAIRING_SESSION_FILE}" "${RUN_LOG_PATH}" "${DEVICE_STATE_FILE}" "${RELAY_HOSTNAME}" "${RELAY_PORT}" "${start_epoch}")"
+  if [[ -n "${pairing_json}" ]]; then
+    break
   fi
   sleep 1
 done
 
-if [[ "${found_pairing}" != "true" ]]; then
-  echo "[live-test] failed: no fresh pairing session was published." >&2
+if [[ -z "${pairing_json}" ]]; then
+  echo "[live-test] failed: no fresh pairing payload was discovered." >&2
   tail -n 80 "${RUN_LOG_PATH}" >&2 || true
   exit 1
 fi
-
-pairing_json="$(node -e '
-const fs = require("fs");
-const file = process.argv[1];
-const session = JSON.parse(fs.readFileSync(file, "utf8"));
-if (!session?.pairingPayload) {
-  process.exit(1);
-}
-process.stdout.write(JSON.stringify(session.pairingPayload));
-' "${PAIRING_SESSION_FILE}")"
 
 pairing_b64="$(printf '%s' "${pairing_json}" | base64 | tr -d '\n')"
 

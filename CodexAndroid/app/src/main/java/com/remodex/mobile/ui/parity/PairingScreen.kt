@@ -92,14 +92,14 @@ fun PairingScreen(
                     stateLabel = connectionStateLabel(connectionState),
                     status = status,
                     indicatorColor = indicatorColor.value,
-                    subtitle = "Login flow: pairing -> connect",
+                    subtitle = "Pairing and connection",
                     onTap = onHeaderTap
                 )
             }
             item {
                 SectionCard(
-                    title = "Scan Pairing QR",
-                    subtitle = "Use the secure QR from your Remodex CLI session."
+                    title = "Scan QR",
+                    subtitle = "Point the camera at the secure code shown by `remodex up`."
                 ) {
                     if (bridgeUpdatePrompt == null) {
                         PairingQrScannerSurface(
@@ -136,17 +136,12 @@ fun PairingScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Text(
-                            text = "1. Update Remodex on your Mac",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
                         OutlinedTextField(
                             value = prompt.command,
                             onValueChange = {},
                             modifier = Modifier.fillMaxWidth(),
                             enabled = false,
-                            label = { Text("Command") }
+                            label = { Text("Update command") }
                         )
                         OutlinedButton(
                             onClick = {
@@ -164,25 +159,23 @@ fun PairingScreen(
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("I Updated It")
+                            Text("Continue")
                         }
                     }
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { showManualEntry = !showManualEntry },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(if (showManualEntry) "Hide Manual Entry" else "Enter Manually")
-                        }
+                    OutlinedButton(
+                        onClick = { showManualEntry = !showManualEntry },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (showManualEntry) "Hide Manual Details" else "Enter Details Manually")
                     }
                 }
             }
             if (showManualEntry) {
                 item {
                     SectionCard(
-                        title = "Manual Pairing Fallback",
-                        subtitle = "Use this only when scanning is unavailable."
+                        title = "Manual Details",
+                        subtitle = "Only use this when the QR path is unavailable."
                     ) {
                         OutlinedTextField(
                             value = relayUrl,
@@ -194,35 +187,38 @@ fun PairingScreen(
                         OutlinedTextField(
                             value = sessionId,
                             onValueChange = onSessionIdChange,
-                            label = { Text("Session ID") },
+                            label = { Text("Session") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
                         OutlinedTextField(
                             value = macDeviceId,
                             onValueChange = onMacDeviceIdChange,
-                            label = { Text("Mac Device ID") },
+                            label = { Text("Mac device") },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
                         OutlinedTextField(
                             value = macIdentityPublicKey,
                             onValueChange = onMacIdentityPublicKeyChange,
-                            label = { Text("Mac Identity Key (base64)") },
+                            label = { Text("Identity key") },
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             Button(
                                 onClick = onRememberPairing,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Remember Pair")
+                                Text("Save")
                             }
                             Button(
                                 onClick = onConnectLive,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("Connect Live")
+                                Text("Connect")
                             }
                         }
                     }
@@ -231,11 +227,12 @@ fun PairingScreen(
             item {
                 SectionCard(
                     title = "Notifications",
-                    subtitle = "Enable workflow alerts for status, permissions, git, rate limits, and CI."
+                    subtitle = "Get alerts when work needs your attention."
                 ) {
                     Text(
-                        text = if (notificationsEnabled) "Enabled" else "Disabled",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = if (notificationsEnabled) "Enabled" else "Off",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (!notificationsEnabled) {
                         Button(

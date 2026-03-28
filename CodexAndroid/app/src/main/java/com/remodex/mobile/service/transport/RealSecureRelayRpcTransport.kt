@@ -63,6 +63,7 @@ class RealSecureRelayRpcTransport(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
 ) : RpcTransport {
+    private var serverMessageListener: ((RpcMessage) -> Unit)? = null
     private val json = Json {
         ignoreUnknownKeys = true
         // Secure control/envelope messages rely on explicit wire `kind` fields.
@@ -89,6 +90,10 @@ class RealSecureRelayRpcTransport(
 
     private var controlMessages: Channel<JsonObject> = Channel(Channel.UNLIMITED)
     private val phoneIdentity: PhoneIdentity = createPhoneIdentity()
+
+    override fun setServerMessageListener(listener: ((RpcMessage) -> Unit)?) {
+        serverMessageListener = listener
+    }
 
     override suspend fun open() {
         stateMutex.withLock {
@@ -154,19 +159,41 @@ class RealSecureRelayRpcTransport(
 
     override suspend fun notify(method: String, params: JsonObject) {
         requestMutex.withLock {
-            if (!isOpen) {
-                AppLogger.info(LOG_TAG, "notify($method) opening transport lazily. ${connectionTag()}")
-                open()
-            }
-            val notification = RpcMessage(
-                jsonrpc = "2.0",
-                id = null,
-                method = method,
-                params = params
-            )
-            val payloadText = json.encodeToString(notification)
-            AppLogger.info(LOG_TAG, "rpc notification send method=$method. ${connectionTag()}")
+            notifyInternal(method = method, params = params, allowRetryOnSendFailure = true)
+        }
+    }
+
+    private suspend fun notifyInternal(
+        method: String,
+        params: JsonObject,
+        allowRetryOnSendFailure: Boolean
+    ) {
+        if (!isOpen) {
+            AppLogger.info(LOG_TAG, "notify($method) opening transport lazily. ${connectionTag()}")
+            open()
+        }
+        val notification = RpcMessage(
+            jsonrpc = "2.0",
+            id = null,
+            method = method,
+            params = params
+        )
+        val payloadText = json.encodeToString(notification)
+        AppLogger.info(LOG_TAG, "rpc notification send method=$method. ${connectionTag()}")
+        try {
             sendEncryptedApplicationPayload(payloadText)
+        } catch (error: Throwable) {
+            AppLogger.warn(
+                LOG_TAG,
+                "rpc notification send failed method=$method recoverable=${isRecoverableSocketSendFailure(error)}.",
+                error
+            )
+            if (allowRetryOnSendFailure && isRecoverableSocketSendFailure(error)) {
+                reopenSessionAfterSendFailure()
+                notifyInternal(method = method, params = params, allowRetryOnSendFailure = false)
+                return
+            }
+            throw error
         }
     }
 
@@ -564,6 +591,11 @@ class RealSecureRelayRpcTransport(
             return
         }
 
+        if (message.method != null && message.id == null) {
+            serverMessageListener?.invoke(message)
+            return
+        }
+
         val idKey = rpcIdKey(message.id) ?: return
         if (message.result != null || message.error != null) {
             AppLogger.debug(LOG_TAG, "Completing RPC response for id=$idKey.")
@@ -659,14 +691,21 @@ class RealSecureRelayRpcTransport(
             is SecureEnvelope -> "encryptedEnvelope" to json.encodeToString(value)
             else -> throw IllegalArgumentException("Unsupported wire payload.")
         }
-        val socket = webSocket ?: throw IllegalStateException("Relay socket is unavailable.")
+        val socket = webSocket ?: run {
+            val error = IllegalStateException("Relay socket is unavailable.")
+            invalidateSocketState(error)
+            throw error
+        }
         val accepted = socket.send(text)
         if (!accepted) {
+            val error = IllegalStateException("Failed to send wire payload to relay socket.")
             AppLogger.error(
                 LOG_TAG,
-                "Socket send returned false for kind=$payloadKind while isOpen=$isOpen. ${connectionTag()}"
+                "Socket send returned false for kind=$payloadKind while isOpen=$isOpen. ${connectionTag()}",
+                error
             )
-            throw IllegalStateException("Failed to send wire payload to relay socket.")
+            invalidateSocketState(error)
+            throw error
         }
         AppLogger.debug(LOG_TAG, "Socket send accepted for kind=$payloadKind.")
     }
@@ -698,6 +737,15 @@ class RealSecureRelayRpcTransport(
         )
         isOpen = false
         secureSession = null
+        failPendingResponses(cause)
+    }
+
+    private fun invalidateSocketState(cause: Throwable) {
+        lastSocketCloseCause = cause
+        isOpen = false
+        secureSession = null
+        runCatching { webSocket?.cancel() }
+        webSocket = null
         failPendingResponses(cause)
     }
 

@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 class FixtureRpcTransport : RpcTransport {
+    private var serverMessageListener: ((RpcMessage) -> Unit)? = null
     private var isInitialized: Boolean = false
     private var currentBranch: String = "remodex/android-parity"
     private var commitCounter: Int = 0
@@ -138,6 +139,10 @@ class FixtureRpcTransport : RpcTransport {
         // No-op for fixture mode.
     }
 
+    override fun setServerMessageListener(listener: ((RpcMessage) -> Unit)?) {
+        serverMessageListener = listener
+    }
+
     override suspend fun close() {
         // No-op for fixture mode.
     }
@@ -163,11 +168,15 @@ class FixtureRpcTransport : RpcTransport {
             "thread/list" -> fixtureThreadList(params)
             "thread/read" -> fixtureThreadRead(params)
             "thread/start" -> fixtureThreadStart(params)
+            "thread/resume" -> fixtureThreadResume(params)
+            "thread/fork" -> fixtureThreadFork(params)
             "thread/name/set" -> fixtureThreadNameSet(params)
             "thread/archive" -> fixtureThreadArchive(params)
             "thread/unarchive" -> fixtureThreadUnarchive(params)
             "turn/start" -> fixtureTurnStart(params)
+            "turn/steer" -> fixtureTurnSteer(params)
             "turn/interrupt" -> fixtureTurnInterrupt(params)
+            "review/start" -> fixtureReviewStart(params)
             "notifications/push/register" -> fixturePushRegister(params)
             "git/status" -> fixtureGitStatus()
             "git/branches" -> fixtureGitBranches()
@@ -367,6 +376,14 @@ class FixtureRpcTransport : RpcTransport {
         threadSummaries.add(0, thread)
         turnsByThread[threadId] = mutableListOf()
         archivedThreadIds.remove(threadId)
+        emitServerNotification(
+            method = "thread/started",
+            params = JsonObject(
+                mapOf(
+                    "thread" to thread
+                )
+            )
+        )
 
         return RpcMessage(
             jsonrpc = "2.0",
@@ -374,6 +391,91 @@ class FixtureRpcTransport : RpcTransport {
             result = JsonObject(
                 mapOf(
                     "thread" to thread
+                )
+            )
+        )
+    }
+
+    private fun fixtureThreadResume(params: JsonObject): RpcMessage {
+        consumeQuota(1)
+        val threadId = (params["threadId"] as? JsonPrimitive)?.contentOrNull
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: (threadSummaries.firstOrNull()?.get("id") as? JsonPrimitive)?.contentOrNull
+            ?: "thread-alpha"
+        val summary = threadSummaries.firstOrNull { summary ->
+            (summary["id"] as? JsonPrimitive)?.contentOrNull == threadId
+        }
+        val resultThread = summary ?: JsonObject(
+            mapOf(
+                "id" to JsonPrimitive(threadId),
+                "title" to JsonPrimitive("Resumed $threadId"),
+                "updated_at" to JsonPrimitive(System.currentTimeMillis())
+            )
+        )
+        emitServerNotification(
+            method = "thread/status/changed",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "status" to JsonPrimitive("resumed")
+                )
+            )
+        )
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-thread-resume-$threadId"),
+            result = JsonObject(
+                mapOf(
+                    "thread" to resultThread,
+                    "threadId" to JsonPrimitive(threadId)
+                )
+            )
+        )
+    }
+
+    private fun fixtureThreadFork(params: JsonObject): RpcMessage {
+        consumeQuota(2)
+        val sourceThreadId = (params["threadId"] as? JsonPrimitive)?.contentOrNull
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: "thread-alpha"
+        val sourceSummary = threadSummaries.firstOrNull { summary ->
+            (summary["id"] as? JsonPrimitive)?.contentOrNull == sourceThreadId
+        }
+        val nextIndex = threadSummaries.size + 1 + turnsByThread.size
+        val threadId = "thread-fork-$nextIndex"
+        val title = sourceSummary
+            ?.let { (it["title"] as? JsonPrimitive)?.contentOrNull ?: (it["name"] as? JsonPrimitive)?.contentOrNull }
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "Fork of $it" }
+            ?: "Forked thread $nextIndex"
+        val cwd = sourceSummary
+            ?.let { (it["cwd"] as? JsonPrimitive)?.contentOrNull }
+            ?.takeIf { it.isNotBlank() }
+            ?: "/Users/yyy/Documents/protein_design/remodex"
+        val thread = JsonObject(
+            mapOf(
+                "id" to JsonPrimitive(threadId),
+                "title" to JsonPrimitive(title),
+                "preview" to JsonPrimitive("Forked from $sourceThreadId"),
+                "cwd" to JsonPrimitive(cwd),
+                "updated_at" to JsonPrimitive(System.currentTimeMillis())
+            )
+        )
+        threadSummaries.add(0, thread)
+        turnsByThread[threadId] = mutableListOf()
+        emitServerNotification(
+            method = "thread/started",
+            params = JsonObject(mapOf("thread" to thread))
+        )
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-thread-fork-$threadId"),
+            result = JsonObject(
+                mapOf(
+                    "thread" to thread,
+                    "sourceThreadId" to JsonPrimitive(sourceThreadId)
                 )
             )
         )
@@ -521,6 +623,15 @@ class FixtureRpcTransport : RpcTransport {
             mutable["updated_at"] = JsonPrimitive(System.currentTimeMillis())
             threadSummaries[index] = JsonObject(mutable)
         }
+        emitServerNotification(
+            method = "thread/name/updated",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "name" to JsonPrimitive(name)
+                )
+            )
+        )
         return RpcMessage(
             jsonrpc = "2.0",
             id = JsonPrimitive("fixture-thread-name-set-$threadId"),
@@ -558,6 +669,16 @@ class FixtureRpcTransport : RpcTransport {
             mutable["updated_at"] = JsonPrimitive(System.currentTimeMillis())
             threadSummaries[index] = JsonObject(mutable)
         }
+        emitServerNotification(
+            method = "thread/status/changed",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "status" to JsonPrimitive(if (unarchive) "unarchived" else "archived"),
+                    "archived" to JsonPrimitive(!unarchive)
+                )
+            )
+        )
         return RpcMessage(
             jsonrpc = "2.0",
             id = JsonPrimitive("fixture-thread-archive-$threadId"),
@@ -597,6 +718,16 @@ class FixtureRpcTransport : RpcTransport {
             }
             if (index >= 0) {
                 turns[index] = withTurnStatus(turns[index], "interrupted")
+                emitServerNotification(
+                    method = "turn/failed",
+                    params = JsonObject(
+                        mapOf(
+                            "turnId" to JsonPrimitive(turnId),
+                            "status" to JsonPrimitive("interrupted"),
+                            "message" to JsonPrimitive("Turn interrupted in fixture runtime.")
+                        )
+                    )
+                )
                 break
             }
         }
@@ -641,14 +772,108 @@ class FixtureRpcTransport : RpcTransport {
             )
         )
         turns += newTurn
-
+        val turnId = "turn-$nextTurnIndex"
+        emitServerNotification(
+            method = "turn/started",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "turnId" to JsonPrimitive(turnId)
+                )
+            )
+        )
+        emitServerNotification(
+            method = "codex/event/user_message",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "turnId" to JsonPrimitive(turnId),
+                    "itemId" to JsonPrimitive("item-u$nextTurnIndex"),
+                    "text" to JsonPrimitive(text)
+                )
+            )
+        )
+        emitServerNotification(
+            method = "item/agentMessage/delta",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "turnId" to JsonPrimitive(turnId),
+                    "itemId" to JsonPrimitive("item-a$nextTurnIndex"),
+                    "text" to JsonPrimitive("Fixture reply: received your turn/start input.")
+                )
+            )
+        )
         return RpcMessage(
             jsonrpc = "2.0",
             id = JsonPrimitive("fixture-turn-start-$threadId-$nextTurnIndex"),
             result = JsonObject(
                 mapOf(
                     "threadId" to JsonPrimitive(threadId),
-                    "turnId" to JsonPrimitive("turn-$nextTurnIndex")
+                    "turnId" to JsonPrimitive(turnId)
+                )
+            )
+        )
+    }
+
+    private fun fixtureTurnSteer(params: JsonObject): RpcMessage {
+        consumeQuota(2)
+        val threadId = (params["threadId"] as? JsonPrimitive)?.contentOrNull
+            ?: (threadSummaries.firstOrNull()?.get("id") as? JsonPrimitive)?.contentOrNull
+            ?: "thread-alpha"
+        val turnId = (params["turnId"] as? JsonPrimitive)?.contentOrNull
+            ?: (turnsByThread[threadId]?.lastOrNull()?.get("id") as? JsonPrimitive)?.contentOrNull
+            ?: "turn-1"
+        val input = (params["input"] as? JsonPrimitive)?.contentOrNull
+            ?: (params["text"] as? JsonPrimitive)?.contentOrNull
+            ?: "Steer current turn."
+        emitServerNotification(
+            method = "codex/event/user_message",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "turnId" to JsonPrimitive(turnId),
+                    "itemId" to JsonPrimitive("item-steer-${System.currentTimeMillis()}"),
+                    "text" to JsonPrimitive(input)
+                )
+            )
+        )
+        emitServerNotification(
+            method = "item/agentMessage/delta",
+            params = JsonObject(
+                mapOf(
+                    "threadId" to JsonPrimitive(threadId),
+                    "turnId" to JsonPrimitive(turnId),
+                    "itemId" to JsonPrimitive("item-a-steer-${System.currentTimeMillis()}"),
+                    "text" to JsonPrimitive("Fixture steer applied.")
+                )
+            )
+        )
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-turn-steer-$turnId"),
+            result = JsonObject(
+                mapOf(
+                    "ok" to JsonPrimitive(true),
+                    "threadId" to JsonPrimitive(threadId),
+                    "turnId" to JsonPrimitive(turnId)
+                )
+            )
+        )
+    }
+
+    private fun fixtureReviewStart(params: JsonObject): RpcMessage {
+        consumeQuota(1)
+        val threadId = (params["threadId"] as? JsonPrimitive)?.contentOrNull
+            ?: "thread-alpha"
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-review-start-$threadId"),
+            result = JsonObject(
+                mapOf(
+                    "ok" to JsonPrimitive(true),
+                    "threadId" to JsonPrimitive(threadId),
+                    "reviewId" to JsonPrimitive("review-${System.currentTimeMillis()}")
                 )
             )
         )
@@ -909,6 +1134,16 @@ class FixtureRpcTransport : RpcTransport {
                 "id" to JsonPrimitive(id),
                 "type" to JsonPrimitive("reasoning"),
                 "text" to JsonPrimitive(text)
+            )
+        )
+    }
+
+    private fun emitServerNotification(method: String, params: JsonObject) {
+        serverMessageListener?.invoke(
+            RpcMessage(
+                jsonrpc = "2.0",
+                method = method,
+                params = params
             )
         )
     }

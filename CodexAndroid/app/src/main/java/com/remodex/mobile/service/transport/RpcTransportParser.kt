@@ -76,6 +76,46 @@ class RpcTransportParser {
         return output
     }
 
+    fun parseThreadSummaryObject(threadObject: JsonObject, forceArchived: Boolean? = null): ThreadSummary? {
+        return parseThreadSummary(threadObject, forceArchived = forceArchived)
+    }
+
+    fun parseTimelineEntry(
+        threadId: String,
+        turnId: String?,
+        itemObject: JsonObject,
+        fallbackId: String = "notification-item"
+    ): TimelineEntry? {
+        val normalizedType = normalizeItemType(itemObject.string("type"))
+        if (normalizedType.isEmpty()) {
+            return null
+        }
+
+        val text = parseItemText(itemObject)
+        if (text.isBlank()) {
+            return null
+        }
+
+        val role = when (normalizedType) {
+            "usermessage" -> TimelineRole.USER
+            "agentmessage", "assistantmessage" -> TimelineRole.ASSISTANT
+            "message" -> {
+                val messageRole = itemObject.string("role").orEmpty().lowercase()
+                if (messageRole.contains("user")) TimelineRole.USER else TimelineRole.ASSISTANT
+            }
+            else -> TimelineRole.SYSTEM
+        }
+
+        return TimelineEntry(
+            id = itemObject.string("id") ?: fallbackId,
+            threadId = threadId,
+            turnId = turnId,
+            type = normalizedType,
+            role = role,
+            text = text
+        )
+    }
+
     private fun parseThreadSummary(threadObject: JsonObject, forceArchived: Boolean? = null): ThreadSummary? {
         val id = threadObject.string("id") ?: return null
         val archivedState = forceArchived

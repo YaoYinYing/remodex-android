@@ -14,6 +14,8 @@ import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
+import com.remodex.mobile.ui.parity.TodoRow
+import com.remodex.mobile.ui.parity.WebsiteFeatureTodos
 import com.remodex.mobile.ui.parity.WorkspaceScreen
 import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.theme.AppFontStyle
@@ -118,6 +120,21 @@ class ParityUiInstrumentationTest {
         composeRule.onNodeWithTag("workspace_refresh_strip").assertIsDisplayed()
         composeRule.onNodeWithText("Menu").performClick()
         composeRule.onNodeWithText("Sidebar").assertIsDisplayed()
+    }
+
+    @Test
+    fun parityTodoRowShowsTheFirstGateEntry() {
+        val todo = WebsiteFeatureTodos.first()
+
+        composeRule.setContent {
+            RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_LIGHT) {
+                TodoRow(todo = todo, state = todo.defaultState)
+            }
+        }
+
+        composeRule.onNodeWithText(todo.title).assertIsDisplayed()
+        composeRule.onNodeWithText(todo.defaultState.name.replace('_', ' ')).assertIsDisplayed()
+        composeRule.onNodeWithText(todo.detail).assertIsDisplayed()
     }
 
     @Test

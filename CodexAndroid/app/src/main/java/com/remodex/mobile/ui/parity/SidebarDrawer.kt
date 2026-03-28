@@ -81,31 +81,34 @@ fun SidebarDrawerContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 14.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = "Sidebar",
+            text = "Remodex",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.onSurface
         )
 
         SectionCard(
             title = "Chats",
-            subtitle = "Grouped by project path."
+            subtitle = "Project groups and recent threads."
         ) {
             OutlinedTextField(
                 value = threadSearchQuery,
                 onValueChange = { threadSearchQuery = it },
-                label = { Text("Search chats") },
+                label = { Text("Search") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Button(
                     onClick = { onStartThread(currentProjectGroupPath) },
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("New in Current Project")
+                    Text("New Chat")
                 }
                 OutlinedButton(
                     onClick = { showProjectChooser = !showProjectChooser },
@@ -120,20 +123,20 @@ fun SidebarDrawerContent(
                         onClick = { onStartThread(group.projectPath) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("New Chat in ${group.label}")
+                        Text(group.label)
                     }
                 }
                 OutlinedButton(
                     onClick = { onStartThread(null) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("New Chat (No Project)")
+                    Text("Without Project")
                 }
             }
 
             if (threadGroups.isEmpty()) {
                 Text(
-                    text = "No chats found.",
+                    text = "No chats yet.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -145,21 +148,13 @@ fun SidebarDrawerContent(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     if (group.kind == ThreadProjectGroupKind.PROJECT && group.projectPath != null) {
-                        OutlinedButton(
-                            onClick = { onStartThread(group.projectPath) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("New Chat in ${group.label}")
-                        }
-                        val liveGroupThreadIds = group.threads
-                            .filterNot { it.isArchived }
-                            .map { it.id }
+                        val liveGroupThreadIds = group.threads.filterNot { it.isArchived }.map { it.id }
                         if (liveGroupThreadIds.size > 1) {
                             OutlinedButton(
                                 onClick = { onArchiveProjectGroup(liveGroupThreadIds) },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("Archive Project Chats")
+                                Text("Archive Group")
                             }
                         }
                     }
@@ -173,11 +168,14 @@ fun SidebarDrawerContent(
                             OutlinedTextField(
                                 value = renameInput,
                                 onValueChange = { renameInput = it },
-                                label = { Text("Thread Name") },
+                                label = { Text("Title") },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 Button(
                                     onClick = {
                                         val normalizedName = renameInput.trim()
@@ -202,7 +200,10 @@ fun SidebarDrawerContent(
                                 }
                             }
                         } else {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
                                 OutlinedButton(
                                     onClick = {
                                         renameThreadId = thread.id
@@ -214,15 +215,11 @@ fun SidebarDrawerContent(
                                 }
                                 OutlinedButton(
                                     onClick = {
-                                        if (thread.isArchived) {
-                                            onUnarchiveThread(thread.id)
-                                        } else {
-                                            onArchiveThread(thread.id)
-                                        }
+                                        if (thread.isArchived) onUnarchiveThread(thread.id) else onArchiveThread(thread.id)
                                     },
                                     modifier = Modifier.weight(1f)
                                 ) {
-                                    Text(if (thread.isArchived) "Unarchive" else "Archive")
+                                    Text(if (thread.isArchived) "Restore" else "Archive")
                                 }
                                 OutlinedButton(
                                     onClick = { onDeleteThreadLocally(thread.id) },
@@ -238,39 +235,13 @@ fun SidebarDrawerContent(
         }
 
         SectionCard(
-            title = "Settings",
-            subtitle = "Match iOS typography and tone options."
+            title = "Workspace",
+            subtitle = "Refresh, sync, and alerts."
         ) {
-            Text("Font style: ${fontStyle.title}", style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.SYSTEM) }, modifier = Modifier.weight(1f)) {
-                    Text("System")
-                }
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST) }, modifier = Modifier.weight(1f)) {
-                    Text("Geist")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST_MONO) }, modifier = Modifier.weight(1f)) {
-                    Text("Geist Mono")
-                }
-                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.JETBRAINS_MONO) }, modifier = Modifier.weight(1f)) {
-                    Text("JetBrains Mono")
-                }
-            }
-            Text("Tone mode: ${toneMode.name.lowercase()}", style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.SYSTEM) }, modifier = Modifier.weight(1f)) {
-                    Text("System")
-                }
-                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_LIGHT) }, modifier = Modifier.weight(1f)) {
-                    Text("Light")
-                }
-                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_DARK) }, modifier = Modifier.weight(1f)) {
-                    Text("Dark")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedButton(
                     onClick = { onAutoRefreshChanged(!autoRefreshEnabled) },
                     modifier = Modifier.weight(1f)
@@ -281,44 +252,111 @@ fun SidebarDrawerContent(
                     onClick = onRefreshWorkspace,
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("Force Refresh")
+                    Text("Refresh")
                 }
             }
-            Text("Logger level: ${loggerLevel.name}", style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { onLoggerLevelChanged(LoggerLevel.DEBUG) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Debug")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = onGitPull, modifier = Modifier.weight(1f)) {
+                    Text("Pull")
                 }
-                OutlinedButton(
-                    onClick = { onLoggerLevelChanged(LoggerLevel.INFO) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Info")
-                }
-                OutlinedButton(
-                    onClick = { onLoggerLevelChanged(LoggerLevel.WARN) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Warn")
-                }
-                OutlinedButton(
-                    onClick = { onLoggerLevelChanged(LoggerLevel.ERROR) },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Error")
+                OutlinedButton(onClick = onGitPush, modifier = Modifier.weight(1f)) {
+                    Text("Push")
                 }
             }
+            Text(
+                text = rateLimitInfo,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = ciStatus,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (!notificationsEnabled) {
+                OutlinedButton(
+                    onClick = onRequestNotificationPermission,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Enable Notifications")
+                }
+            }
+        }
+
+        SectionCard(
+            title = "Settings",
+            subtitle = "Typography, tone, and logger."
+        ) {
+            Text("Font: ${fontStyle.title}", style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.SYSTEM) }, modifier = Modifier.weight(1f)) {
+                    Text("System")
+                }
+                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST) }, modifier = Modifier.weight(1f)) {
+                    Text("Geist")
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST_MONO) }, modifier = Modifier.weight(1f)) {
+                    Text("Geist Mono")
+                }
+                OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.JETBRAINS_MONO) }, modifier = Modifier.weight(1f)) {
+                    Text("JetBrains Mono")
+                }
+            }
+            Text("Tone: ${toneMode.name.lowercase()}", style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.SYSTEM) }, modifier = Modifier.weight(1f)) {
+                    Text("System")
+                }
+                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_LIGHT) }, modifier = Modifier.weight(1f)) {
+                    Text("Light")
+                }
+                OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_DARK) }, modifier = Modifier.weight(1f)) {
+                    Text("Dark")
+                }
+            }
+            Text("Logger: ${loggerLevel.name}", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(
                 value = loggerLinesInput,
                 onValueChange = { loggerLinesInput = it.filter { ch -> ch.isDigit() }.take(6) },
-                label = { Text("Logger max lines") },
+                label = { Text("Max lines") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.DEBUG) }, modifier = Modifier.weight(1f)) {
+                    Text("Debug")
+                }
+                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.INFO) }, modifier = Modifier.weight(1f)) {
+                    Text("Info")
+                }
+                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.WARN) }, modifier = Modifier.weight(1f)) {
+                    Text("Warn")
+                }
+                OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.ERROR) }, modifier = Modifier.weight(1f)) {
+                    Text("Error")
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 OutlinedButton(
                     onClick = {
                         val current = loggerLinesInput.toIntOrNull() ?: loggerMaxLines
@@ -333,7 +371,7 @@ fun SidebarDrawerContent(
                 OutlinedButton(
                     onClick = {
                         val current = loggerLinesInput.toIntOrNull() ?: loggerMaxLines
-                        val updated = (current + 500).coerceAtMost(20000)
+                        val updated = (current + 500).coerceAtMost(20_000)
                         loggerLinesInput = updated.toString()
                         onLoggerMaxLinesChanged(updated)
                     },
@@ -351,44 +389,6 @@ fun SidebarDrawerContent(
                     modifier = Modifier.weight(1f)
                 ) {
                     Text("Apply")
-                }
-            }
-            if (!notificationsEnabled) {
-                Button(
-                    onClick = onRequestNotificationPermission,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Enable Notifications")
-                }
-            }
-            Text(
-                text = rateLimitInfo,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = ciStatus,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        SectionCard(
-            title = "Git Actions",
-            subtitle = "Quick project sync commands."
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = onGitPull,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Pull")
-                }
-                OutlinedButton(
-                    onClick = onGitPush,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Push")
                 }
             }
         }

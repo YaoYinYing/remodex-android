@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -40,28 +41,21 @@ fun OnboardingScreen(onContinue: () -> Unit) {
         ) {
             item {
                 HeroCard(
-                    stateLabel = "Onboarding",
-                    status = "Install local bridge + CLI, then pair with your Mac.",
-                    indicatorColor = MaterialTheme.colorScheme.primary,
-                    subtitle = "iOS-style setup flow"
+                    stateLabel = "Welcome",
+                    status = "Pair with your Mac and keep coding from anywhere.",
+                    indicatorColor = Color(0xFF7AA2F7),
+                    subtitle = "Local-first coding on your desktop thread"
                 )
             }
             item {
                 SectionCard(
-                    title = "1. Install Codex CLI",
-                    subtitle = "AI coding agent used by local bridge."
+                    title = "1. Prepare your Mac",
+                    subtitle = "Install the CLI and bridge once."
                 ) {
                     Text(
                         text = "npm install -g @openai/codex@latest",
                         style = MaterialTheme.typography.labelMedium
                     )
-                }
-            }
-            item {
-                SectionCard(
-                    title = "2. Install Remodex bridge",
-                    subtitle = "Secure relay for local Mac pairing."
-                ) {
                     Text(
                         text = "npm install -g remodex@latest",
                         style = MaterialTheme.typography.labelMedium
@@ -70,18 +64,25 @@ fun OnboardingScreen(onContinue: () -> Unit) {
             }
             item {
                 SectionCard(
-                    title = "3. Start pairing on Mac",
-                    subtitle = "Run and scan QR from your phone."
+                    title = "2. Start a local session",
+                    subtitle = "Open a relay on your Mac before pairing."
                 ) {
                     Text(
                         text = "remodex up",
                         style = MaterialTheme.typography.labelMedium
                     )
+                }
+            }
+            item {
+                SectionCard(
+                    title = "3. Pair and continue",
+                    subtitle = "Scan the QR on the next screen, then open a chat."
+                ) {
                     Button(
                         onClick = onContinue,
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Continue to Pairing")
+                        Text("Continue")
                     }
                 }
             }
@@ -114,27 +115,31 @@ fun PaywallScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             HeroCard(
-                stateLabel = "Access Gate",
-                status = "Development environment access control is enabled.",
+                stateLabel = "Access",
+                status = "This build uses an internal access gate before pairing.",
                 indicatorColor = MaterialTheme.colorScheme.secondary,
-                subtitle = "Internal build gate"
+                subtitle = "Development access"
             )
             SectionCard(
-                title = "Development Access",
-                subtitle = "This gate is for internal testing only. No public pricing is shown."
+                title = "Continue",
+                subtitle = "Pricing is hidden in this development build."
             ) {
-                Text("Use internal access to continue testing Android parity features.")
+                Text(
+                    text = "Use your existing development access and move straight into pairing.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Button(
                     onClick = onUnlock,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Unlock Development Access")
+                    Text("Enter")
                 }
                 OutlinedButton(
                     onClick = onRestore,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("Use Existing Internal Access")
+                    Text("Restore Access")
                 }
             }
         }
