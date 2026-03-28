@@ -18,6 +18,7 @@ RELAY_PORT="${RELAY_PORT:-9000}"
 RELAY_HOSTNAME="${RELAY_HOSTNAME:-}"
 RELAY_BRIDGE_HOST=""
 RELAY_PID=""
+BRIDGE_PID=""
 BRIDGE_SERVICE_STARTED="false"
 
 log() {
@@ -124,6 +125,11 @@ healthcheck_host() {
 }
 
 cleanup() {
+  if [[ -n "${BRIDGE_PID}" ]] && kill -0 "${BRIDGE_PID}" 2>/dev/null; then
+    kill "${BRIDGE_PID}" 2>/dev/null || true
+    wait "${BRIDGE_PID}" 2>/dev/null || true
+  fi
+
   if [[ "${BRIDGE_SERVICE_STARTED}" == "true" ]]; then
     (
       cd "${BRIDGE_DIR}"
@@ -296,14 +302,18 @@ EOF
 }
 
 start_bridge() {
-  log "Starting bridge"
+  log "Starting bridge (foreground local mode)"
   cd "${BRIDGE_DIR}"
+
+  # Prevent stale launchd bridge sessions from competing with local foreground tests.
+  node ./bin/remodex.js stop >/dev/null 2>&1 || true
+
   # Keep the bridge socket on local loopback for stability while advertising
   # the LAN-reachable host in QR payloads for phone pairing.
   REMODEX_RELAY="ws://${RELAY_BRIDGE_HOST}:${RELAY_PORT}/relay" \
   REMODEX_PAIRING_RELAY="ws://${RELAY_HOSTNAME}:${RELAY_PORT}/relay" \
-  node ./bin/remodex.js up
-  BRIDGE_SERVICE_STARTED="true"
+  node ./bin/remodex.js run &
+  BRIDGE_PID=$!
 }
 
 hold_open() {
