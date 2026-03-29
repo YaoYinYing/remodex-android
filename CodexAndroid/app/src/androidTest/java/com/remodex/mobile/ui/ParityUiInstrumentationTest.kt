@@ -162,20 +162,22 @@ class ParityUiInstrumentationTest {
     }
 
     @Test
-    fun scriptedMockWorkflowSendsComposerTurnAndRendersAssistantReply() = runBlocking {
-        val service = scriptedConnectedService()
+    fun scriptedMockWorkflowSendsComposerTurnAndRendersAssistantReply() {
+        runBlocking {
+            val service = scriptedConnectedService()
 
-        composeRule.setContent {
-            RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_DARK) {
-                ScriptedWorkspaceHarness(service = service)
+            composeRule.setContent {
+                RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_DARK) {
+                    ScriptedWorkspaceHarness(service = service)
+                }
             }
-        }
 
-        composeRule.onNodeWithText("Send").performClick()
-        composeRule.waitUntil(timeoutMillis = 6_000L) {
-            service.timeline.value.any { it.text.contains("Scripted emulator assistant reply") }
+            composeRule.onNodeWithText("Send").performClick()
+            composeRule.waitUntil(timeoutMillis = 6_000L) {
+                service.timeline.value.any { it.text.contains("Scripted emulator assistant reply") }
+            }
+            composeRule.onNodeWithText("Scripted emulator assistant reply.").assertIsDisplayed()
         }
-        composeRule.onNodeWithText("Scripted emulator assistant reply.").assertIsDisplayed()
     }
 
     @Test
