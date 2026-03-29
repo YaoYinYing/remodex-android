@@ -276,10 +276,14 @@ fun RemodexApp(
                             .takeUnless { it == "Project path not resolved." }
                             ?.trim()
                             ?.takeIf { it.isNotEmpty() },
+                        archivedThreadCount = threads.count { it.isArchived },
+                        hasProAccess = hasProAccess,
                         trustedPairLabel = service.currentPairing()?.let { pairing ->
                             "Trusted Mac: ${pairing.macDeviceId} · ${pairing.relayUrl}"
                         },
                         notificationsEnabled = notificationsEnabled,
+                        rateLimitInfo = rateLimitInfo,
+                        ciStatus = ciStatus,
                         fontStyle = fontStyle,
                         toneMode = toneMode,
                         loggerLevel = loggerLevel,

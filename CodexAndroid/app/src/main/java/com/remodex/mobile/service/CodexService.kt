@@ -19,6 +19,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -145,6 +147,8 @@ class CodexService(
     private val locallyDeletedThreadIds = mutableSetOf<String>()
     private val rpcMethodAliasCache = mutableMapOf<String, String>()
     private val unavailableMethodKeyCache = mutableSetOf<String>()
+    private val resumedThreadIds = mutableSetOf<String>()
+    private val sessionInitMutex = Mutex()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var rpcTransport: RpcTransport = fixtureTransportFactory()
     private var activeTransportLabel: String = "none"
@@ -196,6 +200,7 @@ class CodexService(
         _currentProjectPath.value = "Project path not resolved."
         activeTurnIdByThread.clear()
         projectPathByThread.clear()
+        resumedThreadIds.clear()
         locallyArchivedThreadIds.clear()
         locallyDeletedThreadIds.clear()
         rpcMethodAliasCache.clear()
@@ -252,6 +257,7 @@ class CodexService(
             bindTransportListener(rpcTransport)
             rpcMethodAliasCache.clear()
             unavailableMethodKeyCache.clear()
+            resumedThreadIds.clear()
             rpcTransport.open()
             initializeSession()
             activeTransportLabel = modeLabel
@@ -332,20 +338,66 @@ class CodexService(
                 throwIfRpcError(initializeResponse, "initialize")
             }
         }
-        AppLogger.info(LOG_TAG, "initialize completed for active relay session.")
+        sendInitializedNotification()
+        AppLogger.info(LOG_TAG, "initialize + initialized completed for active relay session.")
+    }
 
-        runCatching {
-            rpcTransport.notify(
-                method = "initialized",
-                params = JsonObject(emptyMap())
-            )
-        }.onFailure { error ->
-            AppLogger.warn(
-                LOG_TAG,
-                "initialized notification failed non-fatally; continuing session startup.",
-                error
-            )
+    private suspend fun sendInitializedNotification() {
+        var lastError: Throwable? = null
+        repeat(2) { attempt ->
+            runCatching {
+                rpcTransport.notify(
+                    method = "initialized",
+                    params = JsonObject(emptyMap())
+                )
+            }.onSuccess {
+                return
+            }.onFailure { error ->
+                lastError = error
+                AppLogger.warn(
+                    LOG_TAG,
+                    "initialized notification failed (attempt ${attempt + 1}/2).",
+                    error
+                )
+            }
         }
+        throw lastError ?: IllegalStateException("initialized notification failed.")
+    }
+
+    private suspend fun reinitializeSession(reason: String) {
+        sessionInitMutex.withLock {
+            AppLogger.warn(LOG_TAG, "Re-initializing session: $reason")
+            initializeSession()
+        }
+    }
+
+    private suspend fun requestRpc(
+        method: String,
+        params: JsonObject = JsonObject(emptyMap()),
+        allowReinitialize: Boolean = true
+    ): RpcMessage {
+        val response = rpcTransport.request(method = method, params = params)
+        val rpcError = response.error ?: return response
+
+        if (allowReinitialize && shouldReinitializeAfterRpcError(method, rpcError)) {
+            reinitializeSession(reason = "$method failed with Not initialized")
+            return rpcTransport.request(method = method, params = params)
+        }
+
+        return response
+    }
+
+    private fun shouldReinitializeAfterRpcError(method: String, rpcError: RpcError): Boolean {
+        if (method == "initialize") {
+            return false
+        }
+        if (rpcError.code != -32600 && rpcError.code != -32000) {
+            return false
+        }
+        val message = rpcError.message.lowercase()
+        return message.contains("not initialized")
+            || message.contains("session not initialized")
+            || message.contains("client not initialized")
     }
 
     private suspend fun runBootstrapRefresh(label: String, block: suspend () -> Unit) {
@@ -511,6 +563,7 @@ class CodexService(
         }
 
         if (status == "resumed") {
+            resumedThreadIds.add(threadId)
             setStatus("Thread $threadId resumed via $activeTransportLabel.")
         } else if (status.isNotBlank()) {
             setStatus("Thread $threadId status changed to $status via $activeTransportLabel.")
@@ -893,6 +946,7 @@ class CodexService(
         _timeline.value = emptyList()
         activeTurnIdByThread.clear()
         projectPathByThread.clear()
+        resumedThreadIds.clear()
         rpcMethodAliasCache.clear()
         unavailableMethodKeyCache.clear()
         AppLogger.info(LOG_TAG, "disconnect completed; connection state set back to PAIRED.")
@@ -911,7 +965,7 @@ class CodexService(
                 )
             )
         }
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "thread/start",
             params = params
         )
@@ -922,6 +976,7 @@ class CodexService(
         val createdThreadId = createdThread?.string("id")
         refreshThreads(silentStatus = true, includeTimeline = false)
         if (!createdThreadId.isNullOrBlank()) {
+            resumedThreadIds.add(createdThreadId)
             openThread(createdThreadId, silentStatus = true)
             setStatus(
                 if (normalizedPreferredPath != null) {
@@ -938,7 +993,7 @@ class CodexService(
 
     suspend fun refreshThreads(silentStatus: Boolean = false, includeTimeline: Boolean = true) {
         ensureConnected()
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "thread/list",
             params = JsonObject(
                 mapOf(
@@ -954,7 +1009,7 @@ class CodexService(
         val liveThreads = parser.parseThreadList(resultObject, forceArchived = false)
 
         val archivedThreads = runCatching {
-            val archivedResponse = rpcTransport.request(
+            val archivedResponse = requestRpc(
                 method = "thread/list",
                 params = JsonObject(
                     mapOf(
@@ -1028,7 +1083,7 @@ class CodexService(
     suspend fun openThread(threadId: String, silentStatus: Boolean = false) {
         ensureConnected()
         _selectedThreadId.value = threadId
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "thread/read",
             params = JsonObject(
                 mapOf(
@@ -1052,6 +1107,7 @@ class CodexService(
         val threadReadCwd = parseThreadReadCwd(resultObject)
         updateThreadProjectPath(threadId, threadReadCwd)
         updateCurrentProjectPathForThread(threadId)
+        resumedThreadIds.add(threadId)
 
         if (!silentStatus) {
             setStatus("Loaded ${parsedTimeline.size} timeline item(s) for $threadId via $activeTransportLabel.")
@@ -1219,6 +1275,15 @@ class CodexService(
             .map { it.trim() }
             .filter { it.isNotEmpty() }
         val initialThreadId = resolveThreadIdForTurnStart()
+        runCatching { ensureThreadResumed(threadId = initialThreadId) }.onFailure { error ->
+            if (!shouldTreatAsMissingThread(error)) {
+                throw error
+            }
+            AppLogger.warn(
+                LOG_TAG,
+                "thread/resume reported missing thread=$initialThreadId; recovering with continuation thread."
+            )
+        }
         runCatching {
             requestTurnStart(
                 threadId = initialThreadId,
@@ -1245,6 +1310,7 @@ class CodexService(
         }
 
         val continuationThreadId = recoverMissingThreadAndResolveContinuation(initialThreadId)
+        ensureThreadResumed(threadId = continuationThreadId)
         val continuationResponse = requestTurnStart(
             threadId = continuationThreadId,
             normalizedInput = normalizedInput,
@@ -1294,6 +1360,42 @@ class CodexService(
         return createdThreadId
     }
 
+    private suspend fun ensureThreadResumed(threadId: String, force: Boolean = false) {
+        val normalizedThreadId = threadId.trim()
+        if (normalizedThreadId.isEmpty()) {
+            return
+        }
+        if (!force && resumedThreadIds.contains(normalizedThreadId)) {
+            return
+        }
+
+        val params = buildMap<String, kotlinx.serialization.json.JsonElement> {
+            put("threadId", JsonPrimitive(normalizedThreadId))
+            val threadScopedPath = projectPathByThread[normalizedThreadId]
+                ?: _threads.value.firstOrNull { it.id == normalizedThreadId }?.cwd
+            normalizeProjectPath(threadScopedPath)?.let { put("cwd", JsonPrimitive(it)) }
+            val normalizedModel = _selectedModel.value.trim()
+            if (normalizedModel.isNotEmpty()) {
+                put("model", JsonPrimitive(normalizedModel))
+            }
+        }
+        val responsePair = requestFirstAvailable(
+            methods = listOf("thread/resume"),
+            params = JsonObject(params)
+        ) ?: run {
+            resumedThreadIds.add(normalizedThreadId)
+            return
+        }
+        val resumedThread = (responsePair.second.result as? JsonObject)?.let { result ->
+            (result["thread"] as? JsonObject)?.let(parser::parseThreadSummaryObject)
+        }
+        if (resumedThread != null) {
+            upsertThreadSummary(resumedThread)
+            updateThreadProjectPath(resumedThread.id, resumedThread.cwd)
+        }
+        resumedThreadIds.add(normalizedThreadId)
+    }
+
     private suspend fun requestTurnStart(
         threadId: String,
         normalizedInput: String,
@@ -1302,7 +1404,7 @@ class CodexService(
         normalizedFileMentions: List<String>
     ): RpcMessage {
         var imageUrlKey = "url"
-        var response = rpcTransport.request(
+        var response = requestRpc(
             method = "turn/start",
             params = buildTurnStartParams(
                 threadId = threadId,
@@ -1319,7 +1421,7 @@ class CodexService(
             && shouldRetryTurnStartWithImageUrlField(initialRpcError)
         ) {
             imageUrlKey = "image_url"
-            response = rpcTransport.request(
+            response = requestRpc(
                 method = "turn/start",
                 params = buildTurnStartParams(
                     threadId = threadId,
@@ -1373,6 +1475,7 @@ class CodexService(
             ?: normalizeProjectPath(_currentProjectPath.value)
 
         activeTurnIdByThread.remove(missingThreadId)
+        resumedThreadIds.remove(missingThreadId)
         locallyArchivedThreadIds.add(missingThreadId)
         locallyDeletedThreadIds.remove(missingThreadId)
 
@@ -1851,7 +1954,7 @@ class CodexService(
         if (resolvedTurnId.isNullOrBlank()) {
             throw IllegalStateException("No active turn found for $threadId.")
         }
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "turn/interrupt",
             params = JsonObject(
                 mapOf(
@@ -1899,7 +2002,7 @@ class CodexService(
             throw IllegalArgumentException("Push token is required.")
         }
 
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "notifications/push/register",
             params = JsonObject(
                 mapOf(
@@ -1928,7 +2031,7 @@ class CodexService(
             }
             return
         }
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "git/status",
             params = buildGitParams(gitScope)
         )
@@ -1958,7 +2061,7 @@ class CodexService(
             }
             return
         }
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "git/branches",
             params = buildGitParams(gitScope)
         )
@@ -1981,7 +2084,7 @@ class CodexService(
         }
         val gitScope = requireSelectedThreadGitScope()
 
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "git/checkout",
             params = JsonObject(
                 mapOf(
@@ -2004,7 +2107,7 @@ class CodexService(
     suspend fun gitPull() {
         ensureConnected()
         val gitScope = requireSelectedThreadGitScope()
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "git/pull",
             params = buildGitParams(gitScope)
         )
@@ -2020,7 +2123,7 @@ class CodexService(
     suspend fun gitPush() {
         ensureConnected()
         val gitScope = requireSelectedThreadGitScope()
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "git/push",
             params = buildGitParams(gitScope)
         )
@@ -2048,7 +2151,7 @@ class CodexService(
                 )
             )
         }
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "git/commit",
             params = params
         )
@@ -2266,7 +2369,7 @@ class CodexService(
     }
 
     private suspend fun resolveInterruptTurnId(threadId: String): String? {
-        val response = rpcTransport.request(
+        val response = requestRpc(
             method = "thread/read",
             params = JsonObject(
                 mapOf(
@@ -2629,7 +2732,7 @@ class CodexService(
         }
 
         for (method in orderedMethods) {
-            val response = rpcTransport.request(method = method, params = params)
+            val response = requestRpc(method = method, params = params)
             val rpcError = response.error
             if (rpcError != null && isMethodUnavailableError(rpcError)) {
                 if (rpcMethodAliasCache[cacheKey] == method) {

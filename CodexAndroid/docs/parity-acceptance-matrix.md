@@ -5,7 +5,7 @@ Every row must be verified before the iteration is considered complete.
 
 ## Gate Status
 
-- `TODO-01` to `TODO-22`: `DONE` (re-validated on 2026-03-28 after fork submenu + queued-drafts parity pass)
+- `TODO-01` to `TODO-24`: `DONE` (re-validated on 2026-03-29 after settings section parity + transport/session lifecycle recovery alignment)
 
 | TODO | Scope | Verification | Evidence |
 | --- | --- | --- | --- |
@@ -31,11 +31,13 @@ Every row must be verified before the iteration is considered complete.
 | TODO-20 | Final gate closure | Release gate | All TODOs are `DONE`, evidence is attached, and final commit/push is complete |
 | TODO-21 | Fork slash submenu parity | Instrumentation + live ADB | `/fork` shows local/new-worktree destinations and executes the selected flow without regressions |
 | TODO-22 | Queued drafts panel parity | Unit + instrumentation | Queued drafts support per-draft restore/steer/remove actions with stable draft identity and steer locking |
+| TODO-23 | Settings section parity | Screenshot + instrumentation | Android settings mirrors iOS section order and card hierarchy with local-first ChatGPT/Pro/Bridge constraints |
+| TODO-24 | Session initialize/recover parity | Unit + live ADB | Android enforces `initialize+initialized`, retries safely on `Not initialized`, and resumes thread context before `turn/start` like iOS lifecycle intent |
 
 ## Evidence Pack
 
 - `unit+build`: `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug` (pass)
 - `instrumentation`: `./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.remodex.mobile.ui.ParityUiInstrumentationTest` (pass, 6 tests)
-- `live ADB (optional/manual)`: `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:38563 --wait-seconds 80 --skip-build` (pass)
-- `logger DB`: `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:38563` (pass, redaction checks passed)
+- `live ADB (optional/manual)`: `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:40927 --wait-seconds 80 --skip-build`
+- `logger DB`: `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:40927`
 - `UI evidence`: `/tmp/remodex-postinstall.png` captures current pairing/home shell after install; `/tmp/remodex-latest-valid.png` captures workspace shell state

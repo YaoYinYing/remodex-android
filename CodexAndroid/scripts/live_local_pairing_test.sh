@@ -208,6 +208,8 @@ pairing_b64="$(printf '%s' "${pairing_json}" | base64 | tr -d '\n')"
 echo "[live-test] launching app and injecting pairing payload"
 "${ADB_ARGS[@]}" logcat -c || true
 "${ADB_ARGS[@]}" shell am start \
+  -S \
+  -W \
   -n "${APP_PACKAGE}/.MainActivity" \
   --es payload_b64 "${pairing_b64}" \
   --ez connect_live true >/dev/null

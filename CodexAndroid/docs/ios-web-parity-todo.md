@@ -30,9 +30,11 @@ Completion rule for this iteration: every item below must be `DONE`.
 | IW-20 | Re-verify parity evidence pack after the above root-flow and settings changes on physical device. | iteration gate policy | DONE |
 | IW-21 | Implement iOS-style `/fork` destination submenu (local vs new worktree) and route each destination to the matching Android runtime path. | `SlashCommandAutocompletePanel.swift`, `TurnView.swift` fork flow | DONE |
 | IW-22 | Implement iOS-style queued drafts panel with per-draft restore/steer/remove actions and steer-in-progress lock behavior. | `QueuedDraftsPanel.swift`, `TurnViewModel.swift` queued draft handling | DONE |
+| IW-23 | Refactor Android settings into iOS-aligned section order/cards (Archived Chats, Appearance, Notifications, ChatGPT, Pro gate, Bridge Version, Runtime defaults, About, Usage, Connection) and wire available local-first data/actions. | `SettingsView.swift` structure + local-first guardrails | DONE |
+| IW-24 | Align Android transport/session lifecycle with iOS by enforcing strict `initialize` + `initialized`, auto-recovering on RPC `Not initialized`, and resuming thread context before `turn/start`. | `CodexService+Connection.swift`, `CodexService+ThreadsTurns.swift` reconnect/resume behavior | DONE |
 
 ## Evidence
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`
 - `./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.remodex.mobile.ui.ParityUiInstrumentationTest`
-- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:38563 --wait-seconds 80 --skip-build` (optional/manual)
-- `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:38563`
+- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:40927 --wait-seconds 80 --skip-build` (optional/manual)
+- `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:40927`
