@@ -50,6 +50,7 @@ jobs:
   android-instrumentation-emulator:
     name: android-instrumentation-emulator
     runs-on: macos-latest
+    timeout-minutes: 25
     needs: android-build-unit
 
     steps:
@@ -92,6 +93,7 @@ jobs:
           echo "no" | avdmanager create avd --force --name ci-api30 --package "${SYSTEM_IMAGE}" --device "pixel_6"
 
       - name: Boot emulator and run instrumentation tests
+        timeout-minutes: 20
         shell: bash
         run: |
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
@@ -108,13 +110,22 @@ jobs:
           adb start-server
 
           wait_count=0
+          emu_serial=""
+          adb_state=""
+          boot_state=""
           while [[ "${wait_count}" -lt 240 ]]; do
-            adb_state="$(adb get-state 2>/dev/null || true)"
-            boot_state="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')"
+            emu_serial="$(adb devices | awk '/^emulator-[0-9]+\s/ { print $1; exit }')"
+            adb_state="$(adb devices | awk '/^emulator-[0-9]+\s/ { print $2; exit }')"
+            if [[ -n "${emu_serial}" ]]; then
+              boot_state="$(adb -s "${emu_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            else
+              boot_state=""
+            fi
             if [[ "${adb_state}" == "device" && "${boot_state}" == "1" ]]; then
               break
             fi
             if [[ "${adb_state}" == "offline" ]]; then
+              adb reconnect offline >/dev/null 2>&1 || true
               adb kill-server >/dev/null 2>&1 || true
               adb start-server >/dev/null 2>&1 || true
             fi
@@ -122,17 +133,17 @@ jobs:
             sleep 2
           done
 
-          if [[ "${adb_state:-}" != "device" || "${boot_state:-}" != "1" ]]; then
-            echo "Emulator failed readiness checks. adb_state=${adb_state:-unknown} boot=${boot_state:-unknown}"
+          if [[ -z "${emu_serial}" || "${adb_state:-}" != "device" || "${boot_state:-}" != "1" ]]; then
+            echo "Emulator failed readiness checks. serial=${emu_serial:-none} adb_state=${adb_state:-unknown} boot=${boot_state:-unknown}"
             adb devices -l || true
             tail -n 200 /tmp/ci-emulator.log || true
             exit 1
           fi
 
-          if ! adb shell cmd package path android >/dev/null 2>&1; then
+          if ! adb -s "${emu_serial}" shell cmd package path android >/dev/null 2>&1; then
             echo "Package manager not ready after boot."
             adb devices -l || true
-            adb shell getprop || true
+            adb -s "${emu_serial}" shell getprop || true
             tail -n 200 /tmp/ci-emulator.log || true
             exit 1
           fi
