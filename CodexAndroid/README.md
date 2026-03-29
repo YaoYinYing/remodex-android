@@ -32,11 +32,10 @@ Native Android client foundation for full-parity Remodex delivery.
   - Login page (`pairing -> connect`) with saved local pairing metadata
   - Working page (`current project`, `chat`, `code changes`, `permission granting`, `model switching`, `branch selection`)
   - Side slide drawer (`task list`, `iOS component parity checklist`, `settings`, `git actions`, `disconnect`, `rate-limit` + `CI` info)
-- Press-and-slide-down gesture strip to force workspace refresh
+- Workspace refresh control in the top toolbar and sidebar
 - Android notification pipeline for status changes, permission requirements, rate-limit hits, git actions, and CI/CD updates
 - Pinned website-derived TODO lane in-app, advanced sequentially (`DONE`/`IN_PROGRESS`/`TODO`)
-- Parity gate document: [`docs/parity-acceptance-matrix.md`](docs/parity-acceptance-matrix.md)
-- iOS + website parity checklist for this iteration: [`docs/ios-web-parity-todo.md`](docs/ios-web-parity-todo.md)
+- Canonical parity gate + TODO checklist: [`docs/ios-web-parity-todo.md`](docs/ios-web-parity-todo.md)
 - Compose UI instrumentation suite for parity shells and gesture interactions
 - Lower-latency fixture transport simulation and periodic background sync loop to reduce perceived transport delay
 
@@ -55,8 +54,8 @@ cd CodexAndroid
 ./gradlew -g /tmp/gradle-home :app:assembleAndroidTest
 ./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest
 ## Optional manual live validation only:
-bash ./scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:38563 --wait-seconds 70 --skip-build
-bash ./scripts/logger_db_self_test.sh --device 192.168.31.185:38563
+bash ./scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:40927 --wait-seconds 70 --skip-build
+bash ./scripts/logger_db_self_test.sh --device 192.168.31.185:40927
 ```
 
 ## CI gating

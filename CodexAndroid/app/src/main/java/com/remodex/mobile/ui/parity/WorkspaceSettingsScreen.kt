@@ -32,6 +32,8 @@ fun WorkspaceSettingsScreen(
     status: String,
     selectedModel: String,
     availableModels: List<String>,
+    selectedReasoningEffort: String,
+    availableReasoningEfforts: List<String>,
     currentProjectPath: String?,
     archivedThreadCount: Int,
     hasProAccess: Boolean,
@@ -50,6 +52,7 @@ fun WorkspaceSettingsScreen(
     onLoggerLevelChanged: (LoggerLevel) -> Unit,
     onLoggerMaxLinesChanged: (Int) -> Unit,
     onSwitchModel: (String) -> Unit,
+    onSwitchReasoningEffort: (String) -> Unit,
     onDisconnect: () -> Unit,
     onForgetPair: () -> Unit
 ) {
@@ -215,7 +218,22 @@ fun WorkspaceSettingsScreen(
                         }
                     }
                 }
-                SettingsRow(title = "Reasoning", value = "Auto")
+                SettingsRow(title = "Reasoning", value = selectedReasoningEffort)
+                if (availableReasoningEfforts.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        availableReasoningEfforts.take(6).forEach { effort ->
+                            OutlinedButton(
+                                onClick = { onSwitchReasoningEffort(effort) },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(effort)
+                            }
+                        }
+                    }
+                }
                 SettingsRow(title = "Speed", value = "Normal")
                 SettingsRow(title = "Access", value = "Workspace write")
             }
@@ -237,7 +255,7 @@ fun WorkspaceSettingsScreen(
         item {
             SettingsPanel(title = "Usage") {
                 SettingsRow(title = "Rate limits", value = rateLimitInfo)
-                SettingsRow(title = "CI/CD", value = ciStatus)
+                SettingsRow(title = "CI/CD", value = ciStatus.ifBlank { "Unavailable for current thread" })
             }
         }
         item {

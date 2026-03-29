@@ -1,40 +1,51 @@
-# Android iOS/Web Parity TODOs (This Iteration)
+# Android iOS/Web Parity TODO (Canonical)
 
-Source-of-truth inputs:
+Source-of-truth:
 - iOS app source under `CodexMobile/CodexMobile`
-- website feature surface from `https://www.phodex.app/` (live control, git from iPhone, secure pairing, `@files/$skills//commands`, task steering, desktop sync)
+- website claims from `https://www.phodex.app/` (live control, git, secure pairing, `@files/$skills//commands`, steering, desktop sync)
 
-Completion rule for this iteration: every item below must be `DONE`.
+Completion rule:
+- This iteration is complete only when all `TODO-01` to `TODO-24` are `DONE`.
 
-| ID | TODO | iOS / Website basis | Status |
-| --- | --- | --- | --- |
-| IW-01 | Rebuild onboarding as a 5-step pager with iOS CTA progression (`Get Started` -> `Set Up` -> `Continue` -> `Scan QR Code`). | `OnboardingView.swift`, website setup flow | DONE |
-| IW-02 | Keep onboarding setup commands/copy hierarchy aligned to iOS + website setup text. | `OnboardingStepPage.swift`, website setup section | DONE |
-| IW-03 | Keep paywall as silent dev gate (no public pricing) while mirroring iOS feature hierarchy cards. | `SubscriptionGateView.swift`, user constraint | DONE |
-| IW-04 | Align paywall feature copy to website claims (live control, git, secure pairing, command/mention workflow). | website interface/features section | DONE |
-| IW-05 | Bring empty-home visual shell closer to iOS by adding original app logo + connection status capsule treatment. | `HomeEmptyStateView.swift` | DONE |
-| IW-06 | Complete slash-command parity for `/review`, `/subagents`, and `/fork` (target/destination submenus + armed composer chips + iOS-compatible payload semantics). | website `@files, $skills, /commands` + iOS `TurnComposerCommandState.swift`/`SlashCommandAutocompletePanel.swift` | DONE |
-| IW-07 | Add active-turn steering command path (`/steer`) in composer flow. | website task steering claim | DONE |
-| IW-08 | Update Android instrumentation expectations to match the new onboarding/pairing UI wording and current `WorkspaceScreen` API. | Android parity test suite | DONE |
-| IW-09 | Keep local relay living test green after parity updates. | local-first runbook + ADB validation | DONE |
-| IW-10 | Keep logger SQLite/redaction verification green after parity updates. | connection logger acceptance path | DONE |
-| IW-11 | Extend thread metadata parity (`parent/fork/subagent/model`) so sidebar rows can mirror iOS hierarchy cues. | `CodexThread.swift`, `SidebarThreadRowView.swift` | DONE |
-| IW-12 | Add subagent hierarchy flattening and collapse affordance in grouped thread lists. | `SidebarThreadListView.swift` parent/subagent tree behavior | DONE |
-| IW-13 | Add dedicated settings surface (runtime defaults, appearance, connection, diagnostics) accessible from workspace flow. | `SettingsView.swift` card-based navigation target | DONE |
-| IW-14 | Expand incoming event-stream coverage for plan/reasoning/tool/file/command/diff/account/rate update paths. | `CodexService+Incoming.swift` method routing parity | DONE |
-| IW-15 | Stabilize root gate logic by deriving pairing/workspace routing from persisted service pairing state instead of editable text buffers. | `ContentView.swift` root orchestration + saved reconnect behavior | DONE |
-| IW-16 | Keep disconnected paired users on the workspace empty shell with reconnect + scan-new-QR controls (not forced back to full pairing shell). | `HomeEmptyStateView.swift`, website “Trusted devices auto-reconnect” | DONE |
-| IW-17 | Add trusted-pair visibility + forget-pair action in workspace empty state and settings. | `SettingsView.swift` connection card + trusted pair controls | DONE |
-| IW-18 | Promote settings from local workspace overlay toggle to app-level route gating in root flow. | `ContentView.swift` settings destination semantics | DONE |
-| IW-19 | Ensure live local pairing script auto-installs app when instrumentation runs removed the package, preventing false negative “activity not found” failures. | local-first live test reliability requirement | DONE |
-| IW-20 | Re-verify parity evidence pack after the above root-flow and settings changes on physical device. | iteration gate policy | DONE |
-| IW-21 | Implement iOS-style `/fork` destination submenu (local vs new worktree) and route each destination to the matching Android runtime path. | `SlashCommandAutocompletePanel.swift`, `TurnView.swift` fork flow | DONE |
-| IW-22 | Implement iOS-style queued drafts panel with per-draft restore/steer/remove actions and steer-in-progress lock behavior. | `QueuedDraftsPanel.swift`, `TurnViewModel.swift` queued draft handling | DONE |
-| IW-23 | Refactor Android settings into iOS-aligned section order/cards (Archived Chats, Appearance, Notifications, ChatGPT, Pro gate, Bridge Version, Runtime defaults, About, Usage, Connection) and wire available local-first data/actions. | `SettingsView.swift` structure + local-first guardrails | DONE |
-| IW-24 | Align Android transport/session lifecycle with iOS by enforcing strict `initialize` + `initialized`, auto-recovering on RPC `Not initialized`, and resuming thread context before `turn/start`. | `CodexService+Connection.swift`, `CodexService+ThreadsTurns.swift` reconnect/resume behavior | DONE |
+Gate status:
+- `TODO-01` to `TODO-24`: `DONE` (revalidated on 2026-03-29)
 
-## Evidence
+| TODO | Scope | iOS / Website basis | Verification | Evidence | Status |
+| --- | --- | --- | --- | --- | --- |
+| TODO-01 | Root flow parity | `ContentView.swift` route order | Instrumentation | onboarding/paywall/pairing/home gate sequence | DONE |
+| TODO-02 | Onboarding parity | `OnboardingView.swift`, `OnboardingStepPage.swift` | Instrumentation | 5-step CTA progression + copy hierarchy | DONE |
+| TODO-03 | Silent paywall gate | `SubscriptionGateView.swift` + dev constraint | Instrumentation | no public pricing, silent dev gate present | DONE |
+| TODO-04 | QR pairing scanner | iOS pairing flow + website setup | Instrumentation + live ADB | scanner parses QR and hands off to pairing/connect | DONE |
+| TODO-05 | Empty home shell parity | `HomeEmptyStateView.swift` | Screenshot + instrumentation | logo, connection capsule, trusted pair actions | DONE |
+| TODO-06 | Sidebar thread browser | `SidebarThreadListView.swift` | Screenshot + instrumentation | project grouping + archived/chat actions | DONE |
+| TODO-07 | Timeline parity | iOS turn/timeline rendering | Unit + screenshot | typed rows (user/assistant/command/reasoning/plan/system) | DONE |
+| TODO-08 | Composer runtime parity | iOS composer behavior | Instrumentation | send/stop/queue semantics + accessory flow | DONE |
+| TODO-09 | `@files/$skills//commands` parity | website + `TurnComposerCommandState.swift` | Instrumentation | mention chips + autocomplete + slash commands | DONE |
+| TODO-10 | Git actions parity | iOS git controls | Unit + live ADB | status/branches/checkout/commit/pull/push | DONE |
+| TODO-11 | Thread lifecycle parity | iOS thread lifecycle | Unit + live ADB | start/resume/fork/interrupt/archive/unarchive/delete | DONE |
+| TODO-12 | `/steer` + review/fork semantics | website + iOS slash workflow | Unit + instrumentation | review target/fork destination + steer dispatch | DONE |
+| TODO-13 | Voice + media parity | iOS attachment workflow | Instrumentation + live ADB | camera/gallery + voice draft pipeline | DONE |
+| TODO-14 | Notifications parity | iOS local status signaling | Unit + live ADB | status/permission/rate/git/ci event notifications | DONE |
+| TODO-15 | Settings parity | `SettingsView.swift` | Instrumentation | dedicated settings route + iOS section order | DONE |
+| TODO-16 | Branding + visual parity baseline | shipped app assets | Screenshot comparison | Remodex name/logo + iOS-aligned shell styling | DONE |
+| TODO-17 | Transport reconnect stability | iOS connection lifecycle intent | Live ADB soak | no reconnect wedge on send/timeout loop | DONE |
+| TODO-18 | Event-stream ingestion parity | `CodexService+Incoming.swift` | Unit + live ADB | inbound deltas/notifications reconcile state | DONE |
+| TODO-19 | Live ADB acceptance | local-first runbook | Live ADB | pair/send/interrupt/git/settings/reconnect | DONE |
+| TODO-20 | Release gate closure | parity policy | Release checklist | all TODO rows complete + evidence captured | DONE |
+| TODO-21 | `/fork` submenu parity | `SlashCommandAutocompletePanel.swift` | Instrumentation + live ADB | local/new-worktree fork destinations work | DONE |
+| TODO-22 | Queued drafts panel parity | `QueuedDraftsPanel.swift` | Unit + instrumentation | restore/steer/remove with stable draft IDs | DONE |
+| TODO-23 | Settings section card parity | `SettingsView.swift` | Screenshot + instrumentation | iOS card order + local-first content | DONE |
+| TODO-24 | `initialize`/`initialized` + resume parity | `CodexService+Connection.swift` | Unit + live ADB | not-initialized recovery + pre-turn resume | DONE |
+
+## Evidence Pack
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`
 - `./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.remodex.mobile.ui.ParityUiInstrumentationTest`
 - `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:40927 --wait-seconds 80 --skip-build` (optional/manual)
 - `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:40927`
+
+## Backlog (Non-iOS Custom Ideas, Deferred)
+- Genie-style minimized composer with dock-side pinning.
+- Marquee/scrolling workspace title behavior.
+- One-button compact composer mode variant.
+- Full-text conversation indexing/search (repo path, title, content).
+- Remote CI status ingestion from public GitHub/GitLab APIs.

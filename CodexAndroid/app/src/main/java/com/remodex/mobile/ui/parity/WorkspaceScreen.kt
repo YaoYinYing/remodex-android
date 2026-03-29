@@ -7,7 +7,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +24,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
@@ -53,7 +51,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.model.ThreadSummary
@@ -82,6 +79,8 @@ fun WorkspaceScreen(
     currentProjectPath: String,
     availableModels: List<String>,
     selectedModel: String,
+    availableReasoningEfforts: List<String>,
+    selectedReasoningEffort: String,
     pendingPermissions: List<PendingPermissionRequest>,
     rateLimitInfo: String,
     ciStatus: String,
@@ -94,6 +93,8 @@ fun WorkspaceScreen(
     timeline: List<TimelineEntry>,
     composerInput: String,
     onComposerInputChange: (String) -> Unit,
+    onSwitchModel: (String) -> Unit,
+    onSwitchReasoningEffort: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPairing: () -> Unit,
     onHeaderTap: () -> Unit
@@ -108,7 +109,6 @@ fun WorkspaceScreen(
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
     var autoRefreshEnabled by rememberSaveable { mutableStateOf(true) }
-    var refreshGestureDelta by remember { mutableStateOf(0f) }
     val queuedDrafts = remember { mutableStateListOf<QueuedComposerDraft>() }
     val mentionedFiles = remember { mutableStateListOf<String>() }
     val mentionedSkills = remember { mutableStateListOf<SkillSuggestion>() }
@@ -367,7 +367,6 @@ fun WorkspaceScreen(
                 WorkspaceTopBar(
                     status = status,
                     selectedThreadTitle = selectedThread?.displayTitle,
-                    selectedModel = selectedModel,
                     gitStatusSummary = gitStatusSummary,
                     hasPendingPermissions = pendingPermissions.isNotEmpty(),
                     onMenu = {
@@ -377,32 +376,6 @@ fun WorkspaceScreen(
                         scope.launch { runCatching { service.forceRefreshWorkspace() } }
                     },
                     onTap = onHeaderTap
-                )
-
-                CompactRefreshStrip(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                        .testTag("workspace_refresh_strip")
-                        .pointerInput(Unit) {
-                            detectVerticalDragGestures(
-                                onVerticalDrag = { _, dragAmount ->
-                                    if (dragAmount > 0f) {
-                                        refreshGestureDelta += dragAmount
-                                    }
-                                },
-                                onDragEnd = {
-                                    if (refreshGestureDelta > 180f) {
-                                        scope.launch { runCatching { service.forceRefreshWorkspace() } }
-                                    }
-                                    refreshGestureDelta = 0f
-                                },
-                                onDragCancel = {
-                                    refreshGestureDelta = 0f
-                                }
-                            )
-                        },
-                    progress = refreshGestureDelta
                 )
 
                 if (selectedThread == null) {
@@ -494,6 +467,8 @@ fun WorkspaceScreen(
                                 .fillMaxWidth(),
                             selectedModel = selectedModel,
                             availableModels = availableModels,
+                            selectedReasoningEffort = selectedReasoningEffort,
+                            availableReasoningEfforts = availableReasoningEfforts,
                             selectedThreadId = selectedThreadId,
                             composerInput = composerInput,
                             onComposerInputChange = onComposerInputChange,
@@ -529,9 +504,8 @@ fun WorkspaceScreen(
                                     voiceDraftText = ""
                                 }
                             },
-                            onSwitchModel = { model ->
-                                scope.launch { runCatching { service.switchModel(model) } }
-                            },
+                            onSwitchModel = onSwitchModel,
+                            onSwitchReasoningEffort = onSwitchReasoningEffort,
                             onRemoveAttachment = { attachment ->
                                 mediaAttachments.remove(attachment)
                                 if (mediaAttachments.size < MAX_COMPOSER_ATTACHMENTS) {
@@ -841,7 +815,6 @@ fun WorkspaceScreen(
 private fun WorkspaceTopBar(
     status: String,
     selectedThreadTitle: String?,
-    selectedModel: String,
     gitStatusSummary: String,
     hasPendingPermissions: Boolean,
     onMenu: () -> Unit,
@@ -864,7 +837,7 @@ private fun WorkspaceTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                CompactToolbarButton(label = "Menu", onClick = onMenu)
+                CompactToolbarButton(label = "☰", onClick = onMenu)
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -886,53 +859,18 @@ private fun WorkspaceTopBar(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                CompactToolbarButton(label = "Sync", onClick = onRefresh)
+                CompactToolbarButton(label = "↻", onClick = onRefresh)
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                StatusPill(text = selectedModel)
-                if (hasPendingPermissions) {
+            if (hasPendingPermissions) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     StatusPill(text = "Needs approval", accent = Color(0xFFE6A23C))
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun CompactRefreshStrip(
-    modifier: Modifier = Modifier,
-    progress: Float
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(if (progress > 180f) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
-            )
-            Text(
-                text = if (progress > 180f) "Release to refresh workspace" else "Pull down here to refresh",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
         }
     }
 }
@@ -1034,11 +972,13 @@ private fun ConversationMetaRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                text = ciStatus,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (ciStatus.isNotBlank()) {
+                Text(
+                    text = ciStatus,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             if (branches.isNotEmpty()) {
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
@@ -1070,6 +1010,8 @@ private fun ComposerDock(
     modifier: Modifier,
     selectedModel: String,
     availableModels: List<String>,
+    selectedReasoningEffort: String,
+    availableReasoningEfforts: List<String>,
     selectedThreadId: String?,
     composerInput: String,
     onComposerInputChange: (String) -> Unit,
@@ -1096,6 +1038,7 @@ private fun ComposerDock(
     onAttachCamera: () -> Unit,
     onUseVoiceDraft: () -> Unit,
     onSwitchModel: (String) -> Unit,
+    onSwitchReasoningEffort: (String) -> Unit,
     onRemoveAttachment: (TurnImageAttachment) -> Unit,
     onClearSubagentsArmed: () -> Unit,
     onClearReviewTarget: () -> Unit,
@@ -1116,6 +1059,25 @@ private fun ComposerDock(
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
+    var showAdvancedActions by rememberSaveable { mutableStateOf(false) }
+    var showModelMenu by rememberSaveable { mutableStateOf(false) }
+    var showReasoningMenu by rememberSaveable { mutableStateOf(false) }
+    val hasSendPayload = composerInput.isNotBlank()
+        || mediaAttachments.isNotEmpty()
+        || subagentsArmed
+        || armedReviewTarget != null
+    val canStopDirectly = selectedThreadId != null && isRunning && !hasSendPayload
+    val primaryActionLabel = when {
+        canStopDirectly -> "Stop"
+        isRunning -> "Queue"
+        else -> "Send"
+    }
+    val primaryEnabled = if (canStopDirectly) {
+        true
+    } else {
+        selectedThreadId != null && hasSendPayload
+    }
+
     Surface(
         modifier = modifier.navigationBarsPadding(),
         color = MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
@@ -1289,16 +1251,65 @@ private fun ComposerDock(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
-                        .padding(12.dp),
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
+                    .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
-                        value = composerInput,
-                        onValueChange = onComposerInputChange,
-                        label = { Text("Ask anything... @files, \$skills, /commands") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CompactToolbarButton(
+                            label = if (showAdvancedActions) "-" else "+",
+                            onClick = { showAdvancedActions = !showAdvancedActions }
+                        )
+                        SmallChip(
+                            text = selectedModel,
+                            selected = true,
+                            onClick = {
+                                showModelMenu = !showModelMenu
+                                if (showModelMenu) {
+                                    showReasoningMenu = false
+                                }
+                            }
+                        )
+                        SmallChip(
+                            text = selectedReasoningEffort,
+                            selected = true,
+                            onClick = {
+                                showReasoningMenu = !showReasoningMenu
+                                if (showReasoningMenu) {
+                                    showModelMenu = false
+                                }
+                            }
+                        )
+                        CompactToolbarButton(label = "Mic", onClick = onUseVoiceDraft)
+                    }
+                    if (showModelMenu && availableModels.isNotEmpty()) {
+                        SuggestionTray(
+                            labels = availableModels,
+                            onSelected = { index ->
+                                onSwitchModel(availableModels[index])
+                                showModelMenu = false
+                            }
+                        )
+                    }
+                    if (showReasoningMenu && availableReasoningEfforts.isNotEmpty()) {
+                        SuggestionTray(
+                            labels = availableReasoningEfforts,
+                            onSelected = { index ->
+                                onSwitchReasoningEffort(availableReasoningEfforts[index])
+                                showReasoningMenu = false
+                            }
+                        )
+                    }
+                    if (showAdvancedActions) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CompactToolbarButton(label = "Gallery", onClick = onAttachGallery, modifier = Modifier.weight(1f))
+                            CompactToolbarButton(label = "Camera", onClick = onAttachCamera, modifier = Modifier.weight(1f))
+                        }
+                    }
                     if (voiceDraftText.isNotBlank()) {
                         OutlinedTextField(
                             value = voiceDraftText,
@@ -1308,46 +1319,25 @@ private fun ComposerDock(
                         )
                     }
                     Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.Bottom
                     ) {
-                        availableModels.forEach { model ->
-                            SmallChip(
-                                text = model,
-                                selected = model == selectedModel,
-                                onClick = { onSwitchModel(model) }
-                            )
+                        OutlinedTextField(
+                            value = composerInput,
+                            onValueChange = onComposerInputChange,
+                            label = { Text("Ask anything... @files, \$skills, /commands") },
+                            modifier = Modifier.weight(1f),
+                            minLines = 2,
+                            maxLines = 5
+                        )
+                        Button(
+                            onClick = if (canStopDirectly) onStop else onSend,
+                            enabled = primaryEnabled
+                        ) {
+                            Text(primaryActionLabel)
                         }
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        CompactToolbarButton(label = "Gallery", onClick = onAttachGallery, modifier = Modifier.weight(1f))
-                        CompactToolbarButton(label = "Camera", onClick = onAttachCamera, modifier = Modifier.weight(1f))
-                        CompactToolbarButton(label = "Voice", onClick = onUseVoiceDraft, modifier = Modifier.weight(1f))
-                    }
-                }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = onSend,
-                    enabled = (
-                        composerInput.isNotBlank()
-                            || mediaAttachments.isNotEmpty()
-                            || subagentsArmed
-                            || armedReviewTarget != null
-                        ) && selectedThreadId != null,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(if (isRunning) "Queue" else "Send")
-                }
-                OutlinedButton(
-                    onClick = onStop,
-                    enabled = selectedThreadId != null && isRunning,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("Stop")
                 }
             }
         }

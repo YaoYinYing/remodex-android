@@ -129,13 +129,19 @@ class CodexService(
     private val _selectedModel = MutableStateFlow("gpt-5.4")
     val selectedModel: StateFlow<String> = _selectedModel
 
+    private val _availableReasoningEfforts = MutableStateFlow(listOf("low", "medium", "high"))
+    val availableReasoningEfforts: StateFlow<List<String>> = _availableReasoningEfforts
+
+    private val _selectedReasoningEffort = MutableStateFlow("medium")
+    val selectedReasoningEffort: StateFlow<String> = _selectedReasoningEffort
+
     private val _pendingPermissions = MutableStateFlow<List<PendingPermissionRequest>>(emptyList())
     val pendingPermissions: StateFlow<List<PendingPermissionRequest>> = _pendingPermissions
 
     private val _rateLimitInfo = MutableStateFlow("Rate limit info not loaded.")
     val rateLimitInfo: StateFlow<String> = _rateLimitInfo
 
-    private val _ciStatus = MutableStateFlow("CI status not loaded.")
+    private val _ciStatus = MutableStateFlow("")
     val ciStatus: StateFlow<String> = _ciStatus
 
     private val _events = MutableSharedFlow<ServiceEvent>(extraBufferCapacity = 64)
@@ -1082,35 +1088,52 @@ class CodexService(
 
     suspend fun openThread(threadId: String, silentStatus: Boolean = false) {
         ensureConnected()
-        _selectedThreadId.value = threadId
+        val normalizedThreadId = threadId.trim()
+        if (normalizedThreadId.isEmpty()) {
+            return
+        }
+        _selectedThreadId.value = normalizedThreadId
         val response = requestRpc(
             method = "thread/read",
             params = JsonObject(
                 mapOf(
-                    "threadId" to JsonPrimitive(threadId),
+                    "threadId" to JsonPrimitive(normalizedThreadId),
                     "includeTurns" to JsonPrimitive(true)
                 )
             )
         )
-        throwIfRpcError(response, "thread/read")
+        runCatching {
+            throwIfRpcError(response, "thread/read")
+        }.onFailure { error ->
+            if (shouldTreatAsMissingThread(error)) {
+                AppLogger.warn(
+                    LOG_TAG,
+                    "thread/read reported missing thread=$normalizedThreadId; creating continuation thread.",
+                    error
+                )
+                recoverMissingThreadAndResolveContinuation(normalizedThreadId)
+                return
+            }
+            throw error
+        }
         val resultObject = response.result as? JsonObject
             ?: throw IllegalStateException("thread/read result is missing.")
         val parsedTimeline = parser.parseThreadTimeline(resultObject)
         _timeline.value = parsedTimeline
         val activeTurnId = parseActiveTurnId(resultObject)
         if (activeTurnId != null) {
-            activeTurnIdByThread[threadId] = activeTurnId
+            activeTurnIdByThread[normalizedThreadId] = activeTurnId
         } else {
-            activeTurnIdByThread.remove(threadId)
+            activeTurnIdByThread.remove(normalizedThreadId)
         }
 
         val threadReadCwd = parseThreadReadCwd(resultObject)
-        updateThreadProjectPath(threadId, threadReadCwd)
-        updateCurrentProjectPathForThread(threadId)
-        resumedThreadIds.add(threadId)
+        updateThreadProjectPath(normalizedThreadId, threadReadCwd)
+        updateCurrentProjectPathForThread(normalizedThreadId)
+        resumedThreadIds.add(normalizedThreadId)
 
         if (!silentStatus) {
-            setStatus("Loaded ${parsedTimeline.size} timeline item(s) for $threadId via $activeTransportLabel.")
+            setStatus("Loaded ${parsedTimeline.size} timeline item(s) for $normalizedThreadId via $activeTransportLabel.")
         }
     }
 
@@ -1274,56 +1297,46 @@ class CodexService(
         val normalizedFileMentions = fileMentions
             .map { it.trim() }
             .filter { it.isNotEmpty() }
-        val initialThreadId = resolveThreadIdForTurnStart()
-        runCatching { ensureThreadResumed(threadId = initialThreadId) }.onFailure { error ->
-            if (!shouldTreatAsMissingThread(error)) {
-                throw error
-            }
-            AppLogger.warn(
-                LOG_TAG,
-                "thread/resume reported missing thread=$initialThreadId; recovering with continuation thread."
-            )
-        }
-        runCatching {
-            requestTurnStart(
-                threadId = initialThreadId,
-                normalizedInput = normalizedInput,
-                normalizedAttachments = normalizedAttachments,
-                skillMentions = skillMentions,
-                normalizedFileMentions = normalizedFileMentions
-            )
-        }.onSuccess { response ->
-            handleTurnStartSuccess(
-                threadId = initialThreadId,
-                response = response,
-                normalizedFileMentions = normalizedFileMentions
-            )
-            return
-        }.onFailure { error ->
-            if (!shouldTreatAsMissingThread(error)) {
-                throw error
-            }
-            AppLogger.warn(
-                LOG_TAG,
-                "turn/start reported missing thread=$initialThreadId; recovering with continuation thread."
-            )
-        }
+        var threadId = resolveThreadIdForTurnStart()
+        var recoveryCount = 0
+        val maxRecoveries = 2
 
-        val continuationThreadId = recoverMissingThreadAndResolveContinuation(initialThreadId)
-        ensureThreadResumed(threadId = continuationThreadId)
-        val continuationResponse = requestTurnStart(
-            threadId = continuationThreadId,
-            normalizedInput = normalizedInput,
-            normalizedAttachments = normalizedAttachments,
-            skillMentions = skillMentions,
-            normalizedFileMentions = normalizedFileMentions
-        )
-        handleTurnStartSuccess(
-            threadId = continuationThreadId,
-            response = continuationResponse,
-            normalizedFileMentions = normalizedFileMentions,
-            statusMessage = "Turn started on $continuationThreadId via $activeTransportLabel (recovered from missing thread)."
-        )
+        while (true) {
+            try {
+                ensureThreadResumed(threadId = threadId, force = true)
+                val response = requestTurnStart(
+                    threadId = threadId,
+                    normalizedInput = normalizedInput,
+                    normalizedAttachments = normalizedAttachments,
+                    skillMentions = skillMentions,
+                    normalizedFileMentions = normalizedFileMentions
+                )
+                handleTurnStartSuccess(
+                    threadId = threadId,
+                    response = response,
+                    normalizedFileMentions = normalizedFileMentions,
+                    statusMessage = if (recoveryCount > 0) {
+                        "Turn started on $threadId via $activeTransportLabel (continued from archived chat)."
+                    } else {
+                        null
+                    }
+                )
+                return
+            } catch (error: Throwable) {
+                if (!shouldTreatAsMissingThread(error)) {
+                    throw error
+                }
+                if (recoveryCount >= maxRecoveries) {
+                    throw error
+                }
+                AppLogger.warn(
+                    LOG_TAG,
+                    "turn/start lifecycle reported missing thread=$threadId; creating continuation thread."
+                )
+                threadId = recoverMissingThreadAndResolveContinuation(threadId)
+                recoveryCount += 1
+            }
+        }
     }
 
     private fun shouldRetryTurnStartWithImageUrlField(rpcError: RpcError): Boolean {
@@ -1448,7 +1461,14 @@ class CodexService(
             activeTurnIdByThread[threadId] = turnId
         }
         _selectedThreadId.value = threadId
-        openThread(threadId, silentStatus = true)
+        runCatching { openThread(threadId, silentStatus = true) }
+            .onFailure { error ->
+                AppLogger.warn(
+                    LOG_TAG,
+                    "turn/start succeeded but thread/read refresh failed for thread=$threadId.",
+                    error
+                )
+            }
         if (normalizedFileMentions.isNotEmpty()) {
             AppLogger.info(
                 LOG_TAG,
@@ -1492,17 +1512,6 @@ class CodexService(
         }
 
         runCatching { refreshThreads(silentStatus = true, includeTimeline = false) }
-
-        val fallbackThreadId = _threads.value
-            .firstOrNull { !it.isArchived && it.id != missingThreadId }
-            ?.id
-        if (!fallbackThreadId.isNullOrBlank()) {
-            _selectedThreadId.value = fallbackThreadId
-            updateCurrentProjectPathForThread(fallbackThreadId)
-            runCatching { openThread(fallbackThreadId, silentStatus = true) }
-            return fallbackThreadId
-        }
-
         startThread(preferredProjectPath = preferredProjectPath)
         val continuationThreadId = _selectedThreadId.value?.trim().orEmpty()
         if (continuationThreadId.isEmpty()) {
@@ -1575,12 +1584,20 @@ class CodexService(
             )
         }
 
-        return JsonObject(
-            mapOf(
-                "threadId" to JsonPrimitive(threadId),
-                "input" to JsonArray(inputItems)
-            )
+        val payload = mutableMapOf<String, kotlinx.serialization.json.JsonElement>(
+            "threadId" to JsonPrimitive(threadId),
+            "input" to JsonArray(inputItems)
         )
+        val normalizedModel = _selectedModel.value.trim()
+        if (normalizedModel.isNotEmpty()) {
+            payload["model"] = JsonPrimitive(normalizedModel)
+        }
+        val normalizedReasoning = _selectedReasoningEffort.value.trim()
+        if (normalizedReasoning.isNotEmpty()) {
+            payload["effort"] = JsonPrimitive(normalizedReasoning)
+            payload["reasoning_effort"] = JsonPrimitive(normalizedReasoning)
+        }
+        return JsonObject(payload)
     }
 
     suspend fun fuzzyFileSearch(
@@ -2219,11 +2236,26 @@ class CodexService(
             _availableModels.value = parsedModels
         }
 
-        val selected = result.string("selectedModel", "activeModel", "currentModel", "model")
-        if (!selected.isNullOrBlank()) {
-            _selectedModel.value = selected
-        } else if (_availableModels.value.isNotEmpty() && _selectedModel.value.isBlank()) {
-            _selectedModel.value = _availableModels.value.first()
+        val selectedFromRelay = result.string("selectedModel", "activeModel", "currentModel", "model")?.trim()
+        val availableModelSet = _availableModels.value.toSet()
+        val currentSelection = _selectedModel.value.trim()
+        _selectedModel.value = when {
+            currentSelection.isNotEmpty() && availableModelSet.contains(currentSelection) -> currentSelection
+            !selectedFromRelay.isNullOrBlank() && availableModelSet.contains(selectedFromRelay) -> selectedFromRelay
+            _availableModels.value.isNotEmpty() -> _availableModels.value.first()
+            else -> currentSelection
+        }
+
+        val parsedReasoningEfforts = parseReasoningEfforts(result)
+        if (parsedReasoningEfforts.isNotEmpty()) {
+            _availableReasoningEfforts.value = parsedReasoningEfforts
+        }
+        val selectedReasoning = parseSelectedReasoningEffort(result)
+            ?: _selectedReasoningEffort.value.trim()
+        _selectedReasoningEffort.value = if (_availableReasoningEfforts.value.contains(selectedReasoning)) {
+            selectedReasoning
+        } else {
+            _availableReasoningEfforts.value.firstOrNull() ?: "medium"
         }
 
         if (!silentStatus) {
@@ -2232,23 +2264,24 @@ class CodexService(
     }
 
     suspend fun switchModel(model: String) {
-        ensureConnected()
         val normalizedModel = model.trim()
         if (normalizedModel.isEmpty()) {
             throw IllegalArgumentException("Model is required.")
         }
-
-        val responsePair = requestFirstAvailable(
-            methods = listOf("models/select", "model/set"),
-            params = JsonObject(mapOf("model" to JsonPrimitive(normalizedModel)))
-        )
-        if (responsePair == null) {
-            throw IllegalStateException("Relay does not support model switching.")
-        }
-
         _selectedModel.value = normalizedModel
-        refreshModels(silentStatus = true)
-        setStatus("Switched model to $normalizedModel via $activeTransportLabel.", notify = true)
+        setStatus("Selected model $normalizedModel for upcoming turns.", notify = true)
+    }
+
+    fun switchReasoningEffort(effort: String) {
+        val normalizedEffort = effort.trim().lowercase()
+        if (normalizedEffort.isEmpty()) {
+            return
+        }
+        if (!_availableReasoningEfforts.value.contains(normalizedEffort)) {
+            return
+        }
+        _selectedReasoningEffort.value = normalizedEffort
+        setStatus("Selected reasoning effort $normalizedEffort for upcoming turns.")
     }
 
     suspend fun refreshPendingPermissions(silentStatus: Boolean = false) {
@@ -2312,13 +2345,22 @@ class CodexService(
 
     suspend fun refreshCiStatus(silentStatus: Boolean = false) {
         ensureConnected()
+        val gitScope = resolveSelectedThreadGitScopeOrNull()
+        if (gitScope == null) {
+            _ciStatus.value = ""
+            if (!silentStatus) {
+                setStatus("CI status hidden: select a repo-bound thread.")
+            }
+            return
+        }
         val responsePair = requestFirstAvailable(
-            methods = listOf("ci/status", "cicd/status", "pipeline/status")
+            methods = listOf("ci/status", "cicd/status", "pipeline/status"),
+            params = buildGitParams(gitScope)
         )
         if (responsePair == null) {
-            _ciStatus.value = "CI/CD status unavailable from relay."
+            _ciStatus.value = ""
             if (!silentStatus) {
-                setStatus("CI/CD status unavailable from relay.")
+                setStatus("CI status unavailable for this repository.")
             }
             return
         }
@@ -2587,6 +2629,66 @@ class CodexService(
                 else -> null
             }
         }.distinct()
+    }
+
+    private fun parseReasoningEfforts(result: JsonObject): List<String> {
+        val normalized = linkedSetOf<String>()
+
+        fun addCandidate(value: String?) {
+            val candidate = value?.trim()?.lowercase().orEmpty()
+            if (candidate.isNotEmpty()) {
+                normalized += candidate
+            }
+        }
+
+        fun addFromArray(array: JsonArray?) {
+            array?.forEach { element ->
+                when (element) {
+                    is JsonPrimitive -> addCandidate(element.contentOrNull)
+                    is JsonObject -> addCandidate(
+                        element.string(
+                            "reasoningEffort",
+                            "reasoning_effort",
+                            "effort",
+                            "id",
+                            "name"
+                        )
+                    )
+                    else -> Unit
+                }
+            }
+        }
+
+        val modelItems = (result["models"] as? JsonArray)
+            ?: (result["items"] as? JsonArray)
+            ?: (result["data"] as? JsonArray)
+            ?: JsonArray(emptyList())
+        modelItems.forEach { modelElement ->
+            val objectValue = modelElement as? JsonObject ?: return@forEach
+            addFromArray(objectValue["supportedReasoningEfforts"] as? JsonArray)
+            addFromArray(objectValue["supported_reasoning_efforts"] as? JsonArray)
+            addFromArray(objectValue["reasoningEfforts"] as? JsonArray)
+            addFromArray(objectValue["reasoning_efforts"] as? JsonArray)
+        }
+        addFromArray(result["reasoningEfforts"] as? JsonArray)
+        addFromArray(result["reasoning_efforts"] as? JsonArray)
+        addFromArray(result["efforts"] as? JsonArray)
+
+        return if (normalized.isEmpty()) {
+            listOf("low", "medium", "high")
+        } else {
+            normalized.toList()
+        }
+    }
+
+    private fun parseSelectedReasoningEffort(result: JsonObject): String? {
+        return result.string(
+            "selectedReasoningEffort",
+            "selected_reasoning_effort",
+            "reasoningEffort",
+            "reasoning_effort",
+            "effort"
+        )?.trim()?.lowercase()
     }
 
     private fun parsePendingPermissions(result: JsonObject): List<PendingPermissionRequest> {

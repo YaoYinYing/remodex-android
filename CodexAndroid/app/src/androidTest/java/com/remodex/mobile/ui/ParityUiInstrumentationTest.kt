@@ -86,7 +86,7 @@ class ParityUiInstrumentationTest {
     }
 
     @Test
-    fun workspaceDrawerAndRefreshStripAreInteractive() {
+    fun workspaceDrawerAndRefreshControlsAreInteractive() {
         val service = CodexService()
         composeRule.setContent {
             RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_LIGHT) {
@@ -97,6 +97,8 @@ class ParityUiInstrumentationTest {
                     currentProjectPath = "/Users/yyy/Documents/protein_design/remodex",
                     availableModels = listOf("gpt-5.4"),
                     selectedModel = "gpt-5.4",
+                    availableReasoningEfforts = listOf("medium"),
+                    selectedReasoningEffort = "medium",
                     pendingPermissions = emptyList(),
                     rateLimitInfo = "Rate limit: 177/200",
                     ciStatus = "CI status: running",
@@ -109,6 +111,8 @@ class ParityUiInstrumentationTest {
                     timeline = emptyList(),
                     composerInput = "",
                     onComposerInputChange = {},
+                    onSwitchModel = {},
+                    onSwitchReasoningEffort = {},
                     onOpenSettings = {},
                     onOpenPairing = {},
                     onHeaderTap = {}
@@ -116,8 +120,8 @@ class ParityUiInstrumentationTest {
             }
         }
 
-        composeRule.onNodeWithTag("workspace_refresh_strip").assertIsDisplayed()
-        composeRule.onNodeWithText("Menu").performClick()
+        composeRule.onNodeWithText("↻").assertIsDisplayed()
+        composeRule.onNodeWithText("☰").performClick()
         composeRule.onNodeWithText("Chats").assertIsDisplayed()
     }
 
@@ -135,6 +139,8 @@ class ParityUiInstrumentationTest {
                     currentProjectPath = "/Users/yyy/Documents/protein_design/remodex",
                     availableModels = listOf("gpt-5.4"),
                     selectedModel = "gpt-5.4",
+                    availableReasoningEfforts = listOf("medium"),
+                    selectedReasoningEffort = "medium",
                     pendingPermissions = emptyList(),
                     rateLimitInfo = "Rate limit: 177/200",
                     ciStatus = "CI status: running",
@@ -147,6 +153,8 @@ class ParityUiInstrumentationTest {
                     timeline = emptyList(),
                     composerInput = "",
                     onComposerInputChange = {},
+                    onSwitchModel = {},
+                    onSwitchReasoningEffort = {},
                     onOpenSettings = { openSettingsInvoked = true },
                     onOpenPairing = {},
                     onHeaderTap = {}
@@ -154,7 +162,7 @@ class ParityUiInstrumentationTest {
             }
         }
 
-        composeRule.onNodeWithText("Menu").performClick()
+        composeRule.onNodeWithText("☰").performClick()
         composeRule.onNodeWithText("⚙").performClick()
         composeRule.runOnIdle {
             assertTrue(openSettingsInvoked)
@@ -226,6 +234,8 @@ class ParityUiInstrumentationTest {
         val currentProjectPath by service.currentProjectPath.collectAsState()
         val availableModels by service.availableModels.collectAsState()
         val selectedModel by service.selectedModel.collectAsState()
+        val availableReasoningEfforts by service.availableReasoningEfforts.collectAsState()
+        val selectedReasoningEffort by service.selectedReasoningEffort.collectAsState()
         val pendingPermissions by service.pendingPermissions.collectAsState()
         val rateLimitInfo by service.rateLimitInfo.collectAsState()
         val ciStatus by service.ciStatus.collectAsState()
@@ -239,6 +249,8 @@ class ParityUiInstrumentationTest {
             currentProjectPath = currentProjectPath,
             availableModels = availableModels,
             selectedModel = selectedModel,
+            availableReasoningEfforts = availableReasoningEfforts,
+            selectedReasoningEffort = selectedReasoningEffort,
             pendingPermissions = pendingPermissions,
             rateLimitInfo = rateLimitInfo,
             ciStatus = ciStatus,
@@ -251,6 +263,8 @@ class ParityUiInstrumentationTest {
             timeline = timeline,
             composerInput = composerInput,
             onComposerInputChange = { composerInput = it },
+            onSwitchModel = {},
+            onSwitchReasoningEffort = {},
             onOpenSettings = {},
             onOpenPairing = {},
             onHeaderTap = {}

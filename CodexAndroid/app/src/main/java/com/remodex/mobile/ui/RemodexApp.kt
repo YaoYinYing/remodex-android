@@ -64,6 +64,8 @@ fun RemodexApp(
     val currentProjectPath by service.currentProjectPath.collectAsState()
     val availableModels by service.availableModels.collectAsState()
     val selectedModel by service.selectedModel.collectAsState()
+    val availableReasoningEfforts by service.availableReasoningEfforts.collectAsState()
+    val selectedReasoningEffort by service.selectedReasoningEffort.collectAsState()
     val pendingPermissions by service.pendingPermissions.collectAsState()
     val rateLimitInfo by service.rateLimitInfo.collectAsState()
     val ciStatus by service.ciStatus.collectAsState()
@@ -162,8 +164,8 @@ fun RemodexApp(
     val gate = when {
         !hasSeenOnboarding -> AppGate.ONBOARDING
         !hasProAccess -> AppGate.PAYWALL
-        connectionState == ConnectionState.Connected -> AppGate.WORKSPACE
         showSettingsRoute && hasSavedPairing -> AppGate.SETTINGS
+        connectionState == ConnectionState.Connected -> AppGate.WORKSPACE
         forcePairingView -> AppGate.PAIRING
         hasSavedPairing -> AppGate.WORKSPACE
         else -> AppGate.PAIRING
@@ -249,6 +251,8 @@ fun RemodexApp(
                         currentProjectPath = currentProjectPath,
                         availableModels = availableModels,
                         selectedModel = selectedModel,
+                        availableReasoningEfforts = availableReasoningEfforts,
+                        selectedReasoningEffort = selectedReasoningEffort,
                         pendingPermissions = pendingPermissions,
                         rateLimitInfo = rateLimitInfo,
                         ciStatus = ciStatus,
@@ -261,6 +265,8 @@ fun RemodexApp(
                         timeline = timeline,
                         composerInput = composerInput,
                         onComposerInputChange = { composerInput = it },
+                        onSwitchModel = { model -> scope.launch { runCatching { service.switchModel(model) } } },
+                        onSwitchReasoningEffort = { effort -> service.switchReasoningEffort(effort) },
                         onOpenSettings = { showSettingsRoute = true },
                         onOpenPairing = { forcePairingView = true },
                         onHeaderTap = onHeaderTap
@@ -272,6 +278,8 @@ fun RemodexApp(
                         status = status,
                         selectedModel = selectedModel,
                         availableModels = availableModels,
+                        selectedReasoningEffort = selectedReasoningEffort,
+                        availableReasoningEfforts = availableReasoningEfforts,
                         currentProjectPath = currentProjectPath
                             .takeUnless { it == "Project path not resolved." }
                             ?.trim()
@@ -296,6 +304,9 @@ fun RemodexApp(
                         onLoggerMaxLinesChanged = { maxLines -> loggerMaxLines = maxLines.coerceIn(200, 20_000) },
                         onSwitchModel = { model ->
                             scope.launch { runCatching { service.switchModel(model) } }
+                        },
+                        onSwitchReasoningEffort = { effort ->
+                            service.switchReasoningEffort(effort)
                         },
                         onDisconnect = {
                             scope.launch { runCatching { service.disconnect() } }

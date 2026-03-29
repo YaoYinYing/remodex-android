@@ -23,6 +23,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -611,6 +616,24 @@ private fun ThreadMetadataBadge(label: String) {
 @Composable
 fun TimelineRow(item: TimelineEntry) {
     val normalizedType = item.type.trim().lowercase()
+    val isCommandLike = normalizedType.contains("command")
+    val isVerboseType = isCommandLike
+        || normalizedType.contains("reasoning")
+        || normalizedType.contains("tool")
+        || normalizedType.contains("plan")
+    val textLineCount = remember(item.text) { item.text.count { it == '\n' } + 1 }
+    val shouldDefaultCollapse = remember(item.id, item.text, normalizedType) {
+        isVerboseType || item.text.length > 280 || textLineCount > 5
+    }
+    var expanded by rememberSaveable(item.id) { mutableStateOf(!shouldDefaultCollapse) }
+    val collapsedMaxLines = if (isCommandLike) 2 else 4
+    val firstLinePreview = remember(item.text) {
+        item.text.lineSequence()
+            .firstOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: item.text.trim().take(160)
+    }
     val accent = when {
         item.role == TimelineRole.USER -> PlanAccent
         item.role == TimelineRole.ASSISTANT -> CommandAccent
@@ -655,11 +678,33 @@ fun TimelineRow(item: TimelineEntry) {
                 style = MaterialTheme.typography.labelSmall,
                 color = accent
             )
+            if (isCommandLike && shouldDefaultCollapse && !expanded && firstLinePreview.isNotBlank()) {
+                Text(
+                    text = firstLinePreview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Text(
                 text = item.text,
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = if (expanded || !shouldDefaultCollapse) Int.MAX_VALUE else collapsedMaxLines,
+                overflow = TextOverflow.Ellipsis
             )
+            if (shouldDefaultCollapse) {
+                Text(
+                    text = if (expanded) "Show less" else if (isCommandLike) "Show output" else "Show more",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                )
+            }
         }
     }
 }
