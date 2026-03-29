@@ -97,53 +97,66 @@ jobs:
         shell: bash
         run: |
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+          EMU_SERIAL="emulator-5554"
           nohup "${SDK_ROOT}/emulator/emulator" \
             -avd ci-api30 \
+            -port 5554 \
             -no-window \
             -no-audio \
             -no-boot-anim \
             -no-snapshot \
             -gpu swiftshader_indirect \
             > /tmp/ci-emulator.log 2>&1 &
-          echo "EMU_PID=$!" >> "${GITHUB_ENV}"
+          EMU_PID=$!
+          echo "EMU_PID=${EMU_PID}" >> "${GITHUB_ENV}"
+          sleep 3
+          if ! kill -0 "${EMU_PID}" >/dev/null 2>&1; then
+            echo "Emulator process exited immediately."
+            tail -n 200 /tmp/ci-emulator.log || true
+            exit 1
+          fi
 
           adb start-server
 
           wait_count=0
-          emu_serial=""
+          max_wait=210
           adb_state=""
           boot_state=""
-          while [[ "${wait_count}" -lt 240 ]]; do
-            emu_serial="$(adb devices | awk '/^emulator-[0-9]+\s/ { print $1; exit }')"
-            adb_state="$(adb devices | awk '/^emulator-[0-9]+\s/ { print $2; exit }')"
-            if [[ -n "${emu_serial}" ]]; then
-              boot_state="$(adb -s "${emu_serial}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-            else
-              boot_state=""
-            fi
+          while [[ "${wait_count}" -lt "${max_wait}" ]]; do
+            adb_state="$(adb -s "${EMU_SERIAL}" get-state 2>/dev/null || true)"
+            boot_state="$(adb -s "${EMU_SERIAL}" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
             if [[ "${adb_state}" == "device" && "${boot_state}" == "1" ]]; then
               break
+            fi
+            if ! kill -0 "${EMU_PID}" >/dev/null 2>&1; then
+              echo "Emulator process died while waiting for boot."
+              tail -n 200 /tmp/ci-emulator.log || true
+              exit 1
             fi
             if [[ "${adb_state}" == "offline" ]]; then
               adb reconnect offline >/dev/null 2>&1 || true
               adb kill-server >/dev/null 2>&1 || true
               adb start-server >/dev/null 2>&1 || true
             fi
+            if (( wait_count % 15 == 0 )); then
+              echo "Waiting for emulator boot... attempt=${wait_count}/${max_wait} state=${adb_state:-unknown} boot=${boot_state:-unknown}"
+              adb devices -l || true
+            fi
             wait_count=$((wait_count + 1))
             sleep 2
           done
 
-          if [[ -z "${emu_serial}" || "${adb_state:-}" != "device" || "${boot_state:-}" != "1" ]]; then
-            echo "Emulator failed readiness checks. serial=${emu_serial:-none} adb_state=${adb_state:-unknown} boot=${boot_state:-unknown}"
+          if [[ "${adb_state:-}" != "device" || "${boot_state:-}" != "1" ]]; then
+            echo "Emulator failed readiness checks. serial=${EMU_SERIAL} adb_state=${adb_state:-unknown} boot=${boot_state:-unknown}"
             adb devices -l || true
             tail -n 200 /tmp/ci-emulator.log || true
             exit 1
           fi
 
-          if ! adb -s "${emu_serial}" shell cmd package path android >/dev/null 2>&1; then
+          if ! adb -s "${EMU_SERIAL}" shell cmd package path android >/dev/null 2>&1; then
             echo "Package manager not ready after boot."
             adb devices -l || true
-            adb -s "${emu_serial}" shell getprop || true
+            adb -s "${EMU_SERIAL}" shell getprop || true
             tail -n 200 /tmp/ci-emulator.log || true
             exit 1
           fi
