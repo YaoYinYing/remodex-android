@@ -101,6 +101,7 @@ jobs:
           nohup "${SDK_ROOT}/emulator/emulator" \
             -avd ci-api30 \
             -port 5554 \
+            -accel off \
             -no-window \
             -no-audio \
             -no-boot-anim \
@@ -119,7 +120,7 @@ jobs:
           adb start-server
 
           wait_count=0
-          max_wait=210
+          max_wait=360
           adb_state=""
           boot_state=""
           while [[ "${wait_count}" -lt "${max_wait}" ]]; do
