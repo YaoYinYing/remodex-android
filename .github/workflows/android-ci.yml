@@ -17,6 +17,8 @@ jobs:
   android-build-unit:
     name: android-build-unit
     runs-on: ubuntu-latest
+    env:
+      BASE_VERSION: "0.1.0"
 
     steps:
       - name: Checkout repository
@@ -35,6 +37,34 @@ jobs:
       - name: Build debug app and run unit tests
         working-directory: CodexAndroid
         run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:assembleAndroidTest
+
+      - name: Build ABI split APKs (arm64-v8a, x86_64) with commit suffix
+        working-directory: CodexAndroid
+        run: |
+          SHA6="${GITHUB_SHA::6}"
+          ./gradlew :app:assembleDebug \
+            -PenableAbiSplits=true \
+            -PversionCommitSuffix="${SHA6}"
+
+          VERSION_NAME="$(sed -n 's/.*"versionName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' app/build/outputs/apk/debug/output-metadata.json | head -n1)"
+          if [[ -z "${VERSION_NAME}" ]]; then
+            VERSION_NAME="${BASE_VERSION}+${SHA6}"
+          fi
+          echo "APK_VERSION_NAME=${VERSION_NAME}" >> "${GITHUB_ENV}"
+
+      - name: Upload arm64-v8a APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-arm64-v8a-${{ env.APK_VERSION_NAME }}
+          path: CodexAndroid/app/build/outputs/apk/debug/*arm64-v8a*.apk
+          if-no-files-found: error
+
+      - name: Upload x86_64 APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-x86_64-${{ env.APK_VERSION_NAME }}
+          path: CodexAndroid/app/build/outputs/apk/debug/*x86_64*.apk
+          if-no-files-found: error
 
       - name: Upload unit test reports on failure
         if: failure()

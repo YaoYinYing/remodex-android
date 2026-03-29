@@ -4,6 +4,17 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val baseVersionName = "0.1.0"
+val versionCommitSuffix = providers.gradleProperty("versionCommitSuffix").orNull
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+val computedVersionName = if (versionCommitSuffix != null) {
+    "$baseVersionName+$versionCommitSuffix"
+} else {
+    baseVersionName
+}
+val enableAbiSplits = providers.gradleProperty("enableAbiSplits").orNull == "true"
+
 android {
     namespace = "com.remodex.mobile"
     compileSdk = 35
@@ -13,7 +24,7 @@ android {
         minSdk = 27
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = computedVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -48,6 +59,15 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    splits {
+        abi {
+            isEnable = enableAbiSplits
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = !enableAbiSplits
         }
     }
 }
