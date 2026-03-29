@@ -81,7 +81,14 @@ jobs:
         run: |
           ABI="x86_64"
           SYSTEM_IMAGE="system-images;android-30;google_apis;${ABI}"
+          AVD_ROOT="${RUNNER_TEMP}/.android"
+          export ANDROID_EMULATOR_HOME="${AVD_ROOT}"
+          export ANDROID_AVD_HOME="${AVD_ROOT}/avd"
+          mkdir -p "${ANDROID_AVD_HOME}"
+
           echo "SYSTEM_IMAGE=${SYSTEM_IMAGE}" >> "${GITHUB_ENV}"
+          echo "ANDROID_EMULATOR_HOME=${ANDROID_EMULATOR_HOME}" >> "${GITHUB_ENV}"
+          echo "ANDROID_AVD_HOME=${ANDROID_AVD_HOME}" >> "${GITHUB_ENV}"
 
           set +o pipefail
           yes | sdkmanager --licenses > /dev/null 2>&1
@@ -92,7 +99,13 @@ jobs:
             "emulator" \
             "${SYSTEM_IMAGE}"
 
-          echo "no" | avdmanager create avd --force --name ci-api30 --package "${SYSTEM_IMAGE}" --device "pixel_6"
+          echo "no" | avdmanager create avd --force --name ci-api30 --package "${SYSTEM_IMAGE}" --abi "${ABI}" --device "pixel_6"
+          "${ANDROID_SDK_ROOT}/emulator/emulator" -list-avds
+          if ! "${ANDROID_SDK_ROOT}/emulator/emulator" -list-avds | grep -Fxq "ci-api30"; then
+            echo "Failed to create ci-api30 AVD."
+            avdmanager list avd || true
+            exit 1
+          fi
 
       - name: Boot emulator and run instrumentation tests
         timeout-minutes: 20
