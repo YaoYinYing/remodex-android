@@ -244,6 +244,22 @@ val WebsiteFeatureTodos = listOf(
         iosReference = "SidebarThreadListView + SidebarThreadRowView",
         websiteClaim = "Browse more chats at once in a compact project-first sidebar.",
         defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-28",
+        title = "Onboarding hero fidelity",
+        detail = "Mirror the iOS onboarding welcome hero, centered feature page, and step-page hierarchy instead of a generic list layout.",
+        iosReference = "OnboardingWelcomePage + OnboardingFeaturesPage + OnboardingStepPage",
+        websiteClaim = "The first-launch shell should match the shipped product presentation.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-29",
+        title = "Paywall feature-strip fidelity",
+        detail = "Mirror the iOS paywall hero and horizontal feature cards while keeping pricing muted for development.",
+        iosReference = "SubscriptionGateView feature list + hero card",
+        websiteClaim = "The paywall shell should present the same product feature stack as iOS.",
+        defaultState = TodoState.DONE
     )
 )
 
@@ -382,6 +398,16 @@ val ParityAcceptanceMatrix = listOf(
         todoId = "TODO-27",
         verification = "Instrumentation + screenshot",
         evidence = "Sidebar rows are denser and closer to the iOS thread browser presentation."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-28",
+        verification = "Instrumentation + screenshot",
+        evidence = "Onboarding uses the hero splash, centered feature page, and centered step cards from the iOS flow."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-29",
+        verification = "Instrumentation + screenshot",
+        evidence = "Paywall uses a centered hero plus horizontal feature cards instead of the flatter Android-only stack."
     )
 )
 

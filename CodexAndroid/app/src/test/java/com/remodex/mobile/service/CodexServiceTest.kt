@@ -384,10 +384,10 @@ class CodexServiceTest {
 
     @Test
     fun parityTodoGateContainsCanonicalEntriesWithMatchingAcceptanceRows() {
-        assertEquals(27, WebsiteFeatureTodos.size)
-        assertEquals(27, ParityAcceptanceMatrix.size)
+        assertEquals(29, WebsiteFeatureTodos.size)
+        assertEquals(29, ParityAcceptanceMatrix.size)
         assertEquals(
-            (1..27).map { "TODO-%02d".format(it) }.toSet(),
+            (1..29).map { "TODO-%02d".format(it) }.toSet(),
             WebsiteFeatureTodos.map { it.id }.toSet()
         )
         assertEquals(
