@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -87,14 +88,11 @@ fun SidebarDrawerContent(
     ) {
         SidebarIdentityHeader(onOpenSettings = onOpenSettings)
 
-        SectionCard(
-            title = "Chats",
-            subtitle = "Search, create, and switch conversations."
-        ) {
+        SectionCard(title = "Chats", subtitle = "Search, create, and switch.") {
             OutlinedTextField(
                 value = threadSearchQuery,
                 onValueChange = { threadSearchQuery = it },
-                label = { Text("Search conversations") },
+                label = { Text("Search chats") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true
             )
@@ -272,7 +270,7 @@ fun SidebarDrawerContent(
 
         SectionCard(
             title = "Workspace",
-            subtitle = "Refresh and Git operations."
+            subtitle = "Refresh, git, and connection."
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -307,18 +305,19 @@ fun SidebarDrawerContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text(
-                text = ciStatus,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        OutlinedButton(
-            onClick = onDisconnect,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Disconnect")
+            if (ciStatus.isNotBlank()) {
+                Text(
+                    text = ciStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            OutlinedButton(
+                onClick = onDisconnect,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Disconnect")
+            }
         }
     }
 }
@@ -350,8 +349,7 @@ private fun SidebarIdentityHeader(onOpenSettings: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
-        OutlinedButton(onClick = onOpenSettings) {
-            Text("⚙")
-        }
+        Spacer(modifier = Modifier.weight(1f))
+        SmallChip(text = "Settings", selected = false, onClick = onOpenSettings)
     }
 }

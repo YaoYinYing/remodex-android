@@ -50,6 +50,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -469,6 +470,9 @@ fun WorkspaceScreen(
                             availableModels = availableModels,
                             selectedReasoningEffort = selectedReasoningEffort,
                             availableReasoningEfforts = availableReasoningEfforts,
+                            selectedBranch = checkoutBranch,
+                            rateLimitInfo = rateLimitInfo,
+                            ciStatus = ciStatus,
                             selectedThreadId = selectedThreadId,
                             composerInput = composerInput,
                             onComposerInputChange = onComposerInputChange,
@@ -1012,6 +1016,9 @@ private fun ComposerDock(
     availableModels: List<String>,
     selectedReasoningEffort: String,
     availableReasoningEfforts: List<String>,
+    selectedBranch: String,
+    rateLimitInfo: String,
+    ciStatus: String,
     selectedThreadId: String?,
     composerInput: String,
     onComposerInputChange: (String) -> Unit,
@@ -1062,21 +1069,12 @@ private fun ComposerDock(
     var showAdvancedActions by rememberSaveable { mutableStateOf(false) }
     var showModelMenu by rememberSaveable { mutableStateOf(false) }
     var showReasoningMenu by rememberSaveable { mutableStateOf(false) }
+    var isInputFocused by rememberSaveable { mutableStateOf(false) }
     val hasSendPayload = composerInput.isNotBlank()
         || mediaAttachments.isNotEmpty()
         || subagentsArmed
         || armedReviewTarget != null
     val canStopDirectly = selectedThreadId != null && isRunning && !hasSendPayload
-    val primaryActionLabel = when {
-        canStopDirectly -> "Stop"
-        isRunning -> "Queue"
-        else -> "Send"
-    }
-    val primaryEnabled = if (canStopDirectly) {
-        true
-    } else {
-        selectedThreadId != null && hasSendPayload
-    }
 
     Surface(
         modifier = modifier.navigationBarsPadding(),
@@ -1251,12 +1249,14 @@ private fun ComposerDock(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
-                    .padding(12.dp),
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
+                        .padding(top = 10.dp, bottom = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -1284,7 +1284,15 @@ private fun ComposerDock(
                                 }
                             }
                         )
+                        Spacer(modifier = Modifier.weight(1f))
                         CompactToolbarButton(label = "Mic", onClick = onUseVoiceDraft)
+                        if (canStopDirectly) {
+                            CompactToolbarButton(label = "Stop", onClick = onStop)
+                        }
+                        CompactToolbarButton(
+                            label = if (isRunning && hasSendPayload) "Queue" else "Up",
+                            onClick = onSend
+                        )
                     }
                     if (showModelMenu && availableModels.isNotEmpty()) {
                         SuggestionTray(
@@ -1305,7 +1313,10 @@ private fun ComposerDock(
                         )
                     }
                     if (showAdvancedActions) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
                             CompactToolbarButton(label = "Gallery", onClick = onAttachGallery, modifier = Modifier.weight(1f))
                             CompactToolbarButton(label = "Camera", onClick = onAttachCamera, modifier = Modifier.weight(1f))
                         }
@@ -1319,7 +1330,9 @@ private fun ComposerDock(
                         )
                     }
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.Bottom
                     ) {
@@ -1327,20 +1340,64 @@ private fun ComposerDock(
                             value = composerInput,
                             onValueChange = onComposerInputChange,
                             label = { Text("Ask anything... @files, \$skills, /commands") },
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { focusState ->
+                                    isInputFocused = focusState.isFocused
+                                },
                             minLines = 2,
                             maxLines = 5
                         )
-                        Button(
-                            onClick = if (canStopDirectly) onStop else onSend,
-                            enabled = primaryEnabled
-                        ) {
-                            Text(primaryActionLabel)
-                        }
                     }
                 }
             }
+
+            if (!isInputFocused) {
+                ComposerSecondaryBar(
+                    selectedBranch = selectedBranch,
+                    hasBranch = selectedBranch.isNotBlank(),
+                    rateLimitInfo = rateLimitInfo,
+                    ciStatus = ciStatus,
+                    onRefreshStatus = {
+                        if (canStopDirectly) {
+                            onStop()
+                        }
+                    }
+                )
+            }
         }
+    }
+}
+
+@Composable
+private fun ComposerSecondaryBar(
+    selectedBranch: String,
+    hasBranch: Boolean,
+    rateLimitInfo: String,
+    ciStatus: String,
+    onRefreshStatus: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        SmallChip(text = "Local", selected = false, onClick = {})
+        SmallChip(text = "Workspace", selected = false, onClick = {})
+        if (hasBranch) {
+            SmallChip(text = selectedBranch, selected = true, onClick = {})
+        }
+        val statusLabel = when {
+            ciStatus.isNotBlank() -> ciStatus.removePrefix("CI status: ").trim()
+            else -> rateLimitInfo.removePrefix("Rate limit: ").trim()
+        }.take(28)
+        Spacer(modifier = Modifier.weight(1f))
+        CompactToolbarButton(
+            label = statusLabel.ifBlank { "Status" },
+            onClick = onRefreshStatus
+        )
     }
 }
 
@@ -1412,6 +1469,11 @@ private data class QueuedComposerDraft(
     val skillMentions: List<SkillSuggestion>,
     val attachments: List<TurnImageAttachment>
 )
+
+private fun nullIfBlank(value: String?): String? {
+    val normalized = value?.trim().orEmpty()
+    return normalized.takeIf { it.isNotEmpty() }
+}
 
 private fun reviewTargetChipLabel(target: ReviewTarget): String {
     return when (target) {

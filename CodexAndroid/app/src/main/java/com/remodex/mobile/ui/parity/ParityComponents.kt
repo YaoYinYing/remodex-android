@@ -513,84 +513,78 @@ fun ThreadRow(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
         label = "threadBorder"
     )
-    val depthPadding = (depth.coerceIn(0, 5) * 14).dp
+    val depthPadding = (depth.coerceIn(0, 5) * 10).dp
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = depthPadding)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant
+        shape = RoundedCornerShape(14.dp),
+        color = if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, borderColor.value.copy(alpha = 0.8f), RoundedCornerShape(18.dp))
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+                .border(1.dp, borderColor.value.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = if (thread.isSubagent) 8.dp else 11.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Text(
                     text = thread.agentDisplayLabel ?: thread.displayTitle,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = if (thread.isSubagent) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    overflow = TextOverflow.Ellipsis
                 )
+                if (!thread.preview.isNullOrBlank()) {
+                    Text(
+                        text = thread.preview,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = if (thread.isSubagent) 1 else 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (thread.isArchived) {
+                        ThreadMetadataBadge(label = "Archived")
+                    }
+                    if (thread.isForkedThread) {
+                        ThreadMetadataBadge(label = "Fork")
+                    }
+                    if (!thread.model.isNullOrBlank()) {
+                        ThreadMetadataBadge(label = thread.model)
+                    }
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 if (childCount > 0 && onToggleChildren != null) {
                     Text(
-                        text = if (isChildrenExpanded) "▼ $childCount" else "▶ $childCount",
+                        text = if (isChildrenExpanded) "v $childCount" else "> $childCount",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .clip(RoundedCornerShape(10.dp))
                             .clickable(onClick = onToggleChildren)
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .padding(horizontal = 5.dp, vertical = 3.dp)
                     )
                 }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                if (thread.isArchived) {
-                    ThreadMetadataBadge(label = "Archived")
-                }
                 if (thread.isSubagent) {
-                    ThreadMetadataBadge(label = "Subagent")
+                    ThreadMetadataBadge(label = "Agent")
                 }
-                if (thread.isForkedThread) {
-                    ThreadMetadataBadge(label = "Fork")
-                }
-                if (!thread.model.isNullOrBlank()) {
-                    ThreadMetadataBadge(label = thread.model)
-                }
-            }
-            if (!thread.preview.isNullOrBlank()) {
-                Text(
-                    text = thread.preview,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            if (!thread.cwd.isNullOrBlank()) {
-                Text(
-                    text = thread.cwd,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
         }
     }

@@ -8,7 +8,7 @@ Completion rule:
 - This iteration is complete only when all `TODO-01` to `TODO-24` are `DONE`.
 
 Gate status:
-- `TODO-01` to `TODO-24`: `DONE` (revalidated on 2026-03-29)
+- `TODO-01` to `TODO-24`: `DONE` (revalidated on 2026-04-01 after another iOS UI parity pass on composer/sidebar shell)
 
 | TODO | Scope | iOS / Website basis | Verification | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -40,8 +40,8 @@ Gate status:
 ## Evidence Pack
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`
 - `./gradlew -g /tmp/gradle-home :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.remodex.mobile.ui.ParityUiInstrumentationTest`
-- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.31.185:40927 --wait-seconds 80 --skip-build` (optional/manual)
-- `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:40927`
+- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9000 --device 192.168.1.3:42791 --wait-seconds 80 --skip-build` (optional/manual)
+- `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.1.3:42791`
 
 ## Backlog (Non-iOS Custom Ideas, Deferred)
 - Genie-style minimized composer with dock-side pinning.

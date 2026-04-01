@@ -163,7 +163,7 @@ class ParityUiInstrumentationTest {
         }
 
         composeRule.onNodeWithText("☰").performClick()
-        composeRule.onNodeWithText("⚙").performClick()
+        composeRule.onNodeWithText("Settings").performClick()
         composeRule.runOnIdle {
             assertTrue(openSettingsInvoked)
         }
@@ -180,7 +180,7 @@ class ParityUiInstrumentationTest {
                 }
             }
 
-            composeRule.onNodeWithText("Send").performClick()
+            composeRule.onNodeWithText("Up").performClick()
             composeRule.waitUntil(timeoutMillis = 6_000L) {
                 service.timeline.value.any { it.text.contains("Scripted emulator assistant reply") }
             }
