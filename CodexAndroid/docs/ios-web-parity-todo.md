@@ -5,10 +5,10 @@ Source-of-truth:
 - website claims from `https://www.phodex.app/` (live control, git, secure pairing, `@files/$skills//commands`, steering, desktop sync)
 
 Completion rule:
-- This iteration is complete only when all `TODO-01` to `TODO-24` are `DONE`.
+- This iteration is complete only when all `TODO-01` to `TODO-27` are `DONE`.
 
 Gate status:
-- `TODO-01` to `TODO-24`: `DONE` (revalidated on 2026-04-01 after another iOS UI parity pass on composer/sidebar shell)
+- `TODO-01` to `TODO-27`: `DONE` (revalidated on 2026-04-01 after another iOS UI parity pass on composer/sidebar shell and Android-first copy cleanup)
 
 | TODO | Scope | iOS / Website basis | Verification | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -36,6 +36,9 @@ Gate status:
 | TODO-22 | Queued drafts panel parity | `QueuedDraftsPanel.swift` | Unit + instrumentation | restore/steer/remove with stable draft IDs | DONE |
 | TODO-23 | Settings section card parity | `SettingsView.swift` | Screenshot + instrumentation | iOS card order + local-first content | DONE |
 | TODO-24 | `initialize`/`initialized` + resume parity | `CodexService+Connection.swift` | Unit + live ADB | not-initialized recovery + pre-turn resume | DONE |
+| TODO-25 | Android-first product copy | Android branding adaptation of `OnboardingView.swift` + `SubscriptionGateView.swift` | Instrumentation + screenshot | Android onboarding/paywall copy no longer says iPhone | DONE |
+| TODO-26 | Composer secondary bar parity | `TurnComposerSecondaryBar.swift` + `ComposerBottomBar.swift` | Instrumentation + screenshot | lower runtime/status row remains distinct from main composer card | DONE |
+| TODO-27 | Sidebar density parity | `SidebarThreadListView.swift` + `SidebarThreadRowView.swift` | Instrumentation + screenshot | denser thread rows and lighter drawer chrome match iOS scanning rhythm better | DONE |
 
 ## Evidence Pack
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`

@@ -47,12 +47,12 @@ fun OnboardingScreen(onContinue: () -> Unit) {
     val pages = remember {
         listOf(
             OnboardingPage(
-                title = "Control Codex from your iPhone.",
-                subtitle = "Open-source iPhone bridge for Codex. Local-first, end-to-end encrypted."
+                title = "Control Codex from your Android.",
+                subtitle = "Open-source Android bridge for Codex. Local-first, end-to-end encrypted."
             ),
             OnboardingPage(
                 title = "Built for focus.",
-                subtitle = "Live control, Git from iPhone, secure pairing, and @files/\$skills//commands."
+                subtitle = "Live control, Git from Android, secure pairing, and @files/\$skills//commands."
             ),
             OnboardingPage(
                 title = "1. Install Codex CLI",
@@ -130,7 +130,7 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                         }
                         item {
                             OnboardingFeatureTile(
-                                title = "Git from iPhone",
+                                title = "Git from Android",
                                 detail = "Commit, push, pull, branch, stash, and inspect diffs."
                             )
                         }
@@ -271,7 +271,7 @@ fun PaywallScreen(
                     subtitle = "Website + iOS parity claims mirrored in Android."
                 ) {
                     OnboardingFeatureTile(title = "Live control", detail = "Fast mode, Plan mode, steering, queued follow-ups.")
-                    OnboardingFeatureTile(title = "Git from iPhone", detail = "Commit, push, pull, branch, stash, and diff inspection.")
+                    OnboardingFeatureTile(title = "Git from Android", detail = "Commit, push, pull, branch, stash, and diff inspection.")
                     OnboardingFeatureTile(title = "Secure pairing", detail = "QR bootstrap, E2EE transport, trusted reconnect.")
                     OnboardingFeatureTile(title = "@files, \$skills, /commands", detail = "Inline mentions, command routing, and subagent-oriented flow.")
                 }

@@ -90,7 +90,7 @@ val WebsiteFeatureTodos = listOf(
         title = "Composer runtime parity",
         detail = "Match the iOS composer controls, queued drafts, runtime menus, and turn send/stop affordances.",
         iosReference = "TurnComposerView + TurnComposerHostView",
-        websiteClaim = "Compose with the same controls used on iPhone.",
+        websiteClaim = "Compose with the same controls used on Android.",
         defaultState = TodoState.DONE
     ),
     WebsiteTodo(
@@ -154,7 +154,7 @@ val WebsiteFeatureTodos = listOf(
         title = "Branding and visual polish",
         detail = "Keep the original author icon, Remodex naming, fonts, spacing, chips, and motion rhythm aligned to iOS.",
         iosReference = "AppLogo asset + iOS font/style system",
-        websiteClaim = "Match the product's polished iPhone presentation.",
+        websiteClaim = "Match the product's polished Android presentation.",
         defaultState = TodoState.DONE
     ),
     WebsiteTodo(
@@ -187,6 +187,62 @@ val WebsiteFeatureTodos = listOf(
         detail = "Close the parity checklist only after all feature, UI, and live acceptance checks are complete.",
         iosReference = "Parity gate artifact + final release commit",
         websiteClaim = "The iteration is only done when all parity tasks are complete.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-21",
+        title = "/fork submenu parity",
+        detail = "Keep the slash-command fork destinations aligned with iOS so local and worktree flows surface from the same composer panel.",
+        iosReference = "SlashCommandAutocompletePanel fork destination controls",
+        websiteClaim = "Fork work directly from the composer with the same destinations as iOS.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-22",
+        title = "Queued drafts panel parity",
+        detail = "Preserve queued draft restore, steer, and remove actions with stable draft identities and the same panel behavior as iOS.",
+        iosReference = "QueuedDraftsPanel",
+        websiteClaim = "Queued prompts can be managed without losing context.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-23",
+        title = "Settings section card parity",
+        detail = "Match the iOS settings card order and keep the content local-first instead of Android-specific utility sprawl.",
+        iosReference = "SettingsView section layout",
+        websiteClaim = "Settings stay focused, local-first, and structurally identical to iOS.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-24",
+        title = "Initialize and resume parity",
+        detail = "Keep initialize or initialized fallback handling and pre-turn resume behavior aligned with the iOS connection lifecycle.",
+        iosReference = "CodexService connection bootstrap and resume flow",
+        websiteClaim = "Recovered sessions resume cleanly before new work starts.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-25",
+        title = "Android-first product copy",
+        detail = "Replace leftover iPhone-specific wording in the Android onboarding and paywall surfaces while preserving the same structure.",
+        iosReference = "OnboardingView + SubscriptionGateView adapted for Android branding",
+        websiteClaim = "The Android app should describe itself as Android, not iPhone.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-26",
+        title = "Composer secondary bar parity",
+        detail = "Keep the lower runtime and status row visually separated from the main composer card, like the iOS turn screen.",
+        iosReference = "TurnComposerSecondaryBar + ComposerBottomBar",
+        websiteClaim = "Runtime context stays visible without bloating the composer.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-27",
+        title = "Sidebar density parity",
+        detail = "Compress thread rows and reduce drawer chrome so the Android sidebar scans like the iOS chat browser.",
+        iosReference = "SidebarThreadListView + SidebarThreadRowView",
+        websiteClaim = "Browse more chats at once in a compact project-first sidebar.",
         defaultState = TodoState.DONE
     )
 )
@@ -291,6 +347,41 @@ val ParityAcceptanceMatrix = listOf(
         todoId = "TODO-20",
         verification = "Release gate",
         evidence = "All TODOs are DONE and the final commit/push is complete."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-21",
+        verification = "Instrumentation + live ADB",
+        evidence = "Fork destinations expose local and worktree targets from the slash-command panel."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-22",
+        verification = "Unit + instrumentation",
+        evidence = "Queued drafts restore, steer, and remove correctly without unstable draft identities."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-23",
+        verification = "Screenshot + instrumentation",
+        evidence = "Settings cards follow the same order and local-first content structure as iOS."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-24",
+        verification = "Unit + live ADB",
+        evidence = "Initialize fallback and resume flows recover a session before turn start."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-25",
+        verification = "Instrumentation + screenshot",
+        evidence = "Android onboarding and paywall copy describe Android instead of iPhone."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-26",
+        verification = "Instrumentation + screenshot",
+        evidence = "Composer shows a distinct lower runtime/status row beneath the main input card."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-27",
+        verification = "Instrumentation + screenshot",
+        evidence = "Sidebar rows are denser and closer to the iOS thread browser presentation."
     )
 )
 

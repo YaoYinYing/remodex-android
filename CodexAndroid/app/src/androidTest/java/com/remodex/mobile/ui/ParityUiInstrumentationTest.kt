@@ -50,9 +50,22 @@ class ParityUiInstrumentationTest {
                 OnboardingScreen(onContinue = {})
             }
         }
+        composeRule.onNodeWithText("Control Codex from your Android.").assertIsDisplayed()
         composeRule.onNodeWithText("Get Started").assertIsDisplayed()
         composeRule.onNodeWithText("Get Started").performClick()
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            runCatching {
+                composeRule.onNodeWithText("Built for focus.").assertIsDisplayed()
+                true
+            }.getOrDefault(false)
+        }
         composeRule.onNodeWithText("Set Up").performClick()
+        composeRule.waitUntil(timeoutMillis = 3_000L) {
+            runCatching {
+                composeRule.onNodeWithText("1. Install Codex CLI").assertIsDisplayed()
+                true
+            }.getOrDefault(false)
+        }
         composeRule.onNodeWithText("npm install -g @openai/codex@latest").assertIsDisplayed()
     }
 
