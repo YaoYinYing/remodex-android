@@ -4,9 +4,17 @@ import android.graphics.Bitmap
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -53,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.model.ThreadSummary
@@ -102,6 +112,7 @@ fun WorkspaceScreen(
     onOpenSettings: () -> Unit,
     onOpenPairing: () -> Unit,
     onHeaderTap: () -> Unit,
+    dockCollapsedSide: String,
     gitActionStatus: String?,
     voiceRecoverySnapshot: RecoveryAccessorySnapshot?,
     onVoiceRecoveryAction: () -> Unit,
@@ -141,9 +152,11 @@ fun WorkspaceScreen(
     var steeringQueuedDraftId by rememberSaveable { mutableStateOf<String?>(null) }
     val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
     var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
+    var isDispatching by rememberSaveable(selectedThreadId) { mutableStateOf(false) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
     var showVoiceSetupSheet by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
+    val timelineListState = rememberLazyListState()
     val galleryPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) {
             return@rememberLauncherForActivityResult
@@ -193,6 +206,11 @@ fun WorkspaceScreen(
         showReviewTargetSuggestions = false
         showForkDestinationSuggestions = false
         attachmentHint = null
+    }
+    val userMessageIndexes = remember(timeline) {
+        timeline.mapIndexedNotNull { index, item ->
+            index.takeIf { item.role == com.remodex.mobile.model.TimelineRole.USER }
+        }
     }
 
     LaunchedEffect(isConnected, autoRefreshEnabled) {
@@ -281,6 +299,12 @@ fun WorkspaceScreen(
         }.onFailure { error ->
             queuePaused = true
             attachmentHint = "Queue paused: ${error.message ?: "Failed to send queued draft."}"
+        }
+    }
+
+    LaunchedEffect(selectedThreadId, timeline.size) {
+        if (timeline.isNotEmpty()) {
+            timelineListState.animateScrollToItem(timeline.lastIndex)
         }
     }
 
@@ -417,6 +441,7 @@ fun WorkspaceScreen(
                 } else {
                     Box(modifier = Modifier.fillMaxSize()) {
                         LazyColumn(
+                            state = timelineListState,
                             modifier = Modifier.fillMaxSize(),
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 276.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -502,6 +527,7 @@ fun WorkspaceScreen(
                             selectedThreadId = selectedThreadId,
                             composerInput = composerInput,
                             onComposerInputChange = onComposerInputChange,
+                            dockCollapsedSide = dockCollapsedSide,
                             voiceDraftText = voiceDraftText,
                             onVoiceDraftTextChange = { voiceDraftText = it },
                             mediaAttachments = mediaAttachments,
@@ -520,6 +546,7 @@ fun WorkspaceScreen(
                             queuePaused = queuePaused,
                             steeringQueuedDraftId = steeringQueuedDraftId,
                             isRunning = service.isThreadRunning(selectedThreadId),
+                            isDispatching = isDispatching,
                             onQueuePausedChange = { queuePaused = it },
                             onAttachGallery = { galleryPicker.launch("image/*") },
                             onAttachCamera = { cameraPreviewLauncher.launch(null) },
@@ -766,66 +793,74 @@ fun WorkspaceScreen(
                                 showForkDestinationSuggestions = false
                             },
                             onSend = {
+                                if (isDispatching) {
+                                    return@ComposerDock
+                                }
                                 val selectedReviewTarget = armedReviewTarget
                                 val trimmed = composerInput.trim()
                                 if (selectedReviewTarget == null && trimmed.isEmpty() && mediaAttachments.isEmpty() && !subagentsArmed) {
                                     return@ComposerDock
                                 }
+                                isDispatching = true
                                 scope.launch {
-                                    val activeThreadId = selectedThreadId
-                                    val threadBusy = if (!activeThreadId.isNullOrBlank() && service.isThreadRunning(activeThreadId)) {
-                                        runCatching { service.reconcileThreadRunningState(activeThreadId) }
-                                            .getOrElse { true }
-                                    } else {
-                                        false
-                                    }
+                                    try {
+                                        val activeThreadId = selectedThreadId
+                                        val threadBusy = if (!activeThreadId.isNullOrBlank() && service.isThreadRunning(activeThreadId)) {
+                                            runCatching { service.reconcileThreadRunningState(activeThreadId) }
+                                                .getOrElse { true }
+                                        } else {
+                                            false
+                                        }
 
-                                    if (selectedReviewTarget != null) {
-                                        if (threadBusy) {
-                                            attachmentHint = "Wait for the current response to finish before starting a review."
+                                        if (selectedReviewTarget != null) {
+                                            if (threadBusy) {
+                                                attachmentHint = "Wait for the current response to finish before starting a review."
+                                                return@launch
+                                            }
+                                            runCatching {
+                                                service.reviewStart(
+                                                    threadId = activeThreadId,
+                                                    target = selectedReviewTarget,
+                                                    baseBranch = checkoutBranch.trim().takeIf { it.isNotEmpty() }
+                                                )
+                                            }.onSuccess {
+                                                armedReviewTarget = null
+                                                clearComposerAfterDispatch()
+                                            }.onFailure {
+                                                attachmentHint = it.message ?: "Failed to start review."
+                                            }
                                             return@launch
                                         }
+
+                                        if (threadBusy) {
+                                            queuedDrafts.add(
+                                                QueuedComposerDraft(
+                                                    id = "draft-${System.currentTimeMillis()}-${queuedDrafts.size}",
+                                                    text = trimmed,
+                                                    subagentsArmed = subagentsArmed,
+                                                    fileMentions = mentionedFiles.toList(),
+                                                    skillMentions = mentionedSkills.toList(),
+                                                    attachments = mediaAttachments.toList()
+                                                )
+                                            )
+                                            clearComposerAfterDispatch()
+                                            return@launch
+                                        }
+
                                         runCatching {
-                                            service.reviewStart(
-                                                threadId = activeThreadId,
-                                                target = selectedReviewTarget,
-                                                baseBranch = checkoutBranch.trim().takeIf { it.isNotEmpty() }
+                                            service.sendTurnStart(
+                                                inputText = buildComposerPayloadText(trimmed, subagentsArmed),
+                                                attachments = mediaAttachments.toList(),
+                                                skillMentions = mentionedSkills.toList(),
+                                                fileMentions = mentionedFiles.toList()
                                             )
                                         }.onSuccess {
-                                            armedReviewTarget = null
                                             clearComposerAfterDispatch()
                                         }.onFailure {
-                                            attachmentHint = it.message ?: "Failed to start review."
+                                            attachmentHint = it.message ?: "Failed to send message."
                                         }
-                                        return@launch
-                                    }
-
-                                    if (threadBusy) {
-                                        queuedDrafts.add(
-                                            QueuedComposerDraft(
-                                                id = "draft-${System.currentTimeMillis()}-${queuedDrafts.size}",
-                                                text = trimmed,
-                                                subagentsArmed = subagentsArmed,
-                                                fileMentions = mentionedFiles.toList(),
-                                                skillMentions = mentionedSkills.toList(),
-                                                attachments = mediaAttachments.toList()
-                                            )
-                                        )
-                                        clearComposerAfterDispatch()
-                                        return@launch
-                                    }
-
-                                    runCatching {
-                                        service.sendTurnStart(
-                                            inputText = buildComposerPayloadText(trimmed, subagentsArmed),
-                                            attachments = mediaAttachments.toList(),
-                                            skillMentions = mentionedSkills.toList(),
-                                            fileMentions = mentionedFiles.toList()
-                                        )
-                                    }.onSuccess {
-                                        clearComposerAfterDispatch()
-                                    }.onFailure {
-                                        attachmentHint = it.message ?: "Failed to send message."
+                                    } finally {
+                                        isDispatching = false
                                     }
                                 }
                             },
@@ -835,6 +870,22 @@ fun WorkspaceScreen(
                                 scope.launch { runCatching { service.interruptActiveTurn() } }
                             }
                         )
+                        if (userMessageIndexes.size > 1) {
+                            TimelineScrubber(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .padding(end = 6.dp, bottom = 144.dp),
+                                count = userMessageIndexes.size,
+                                onPositionChanged = { normalized ->
+                                    val target = userMessageIndexes[
+                                        (normalized * userMessageIndexes.lastIndex)
+                                            .toInt()
+                                            .coerceIn(0, userMessageIndexes.lastIndex)
+                                    ]
+                                    scope.launch { timelineListState.scrollToItem(target) }
+                                }
+                            )
+                        }
 
                         if (showVoiceSetupSheet) {
                             VoiceSetupHelpDialog(
@@ -914,10 +965,11 @@ private fun WorkspaceTopBar(
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
                     )
                     Text(
-                        text = if (selectedThreadTitle == null) status else gitStatusSummary,
+                        text = middleClip(if (selectedThreadTitle == null) status else gitStatusSummary, maxChars = 48),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -1008,6 +1060,7 @@ private fun ConversationMetaRow(
     onPull: () -> Unit,
     onPush: () -> Unit
 ) {
+    val hasCiStatus = ciStatus.isNotBlank()
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
@@ -1042,7 +1095,7 @@ private fun ConversationMetaRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (ciStatus.isNotBlank()) {
+            if (hasCiStatus) {
                 Text(
                     text = ciStatus,
                     style = MaterialTheme.typography.labelSmall,
@@ -1143,6 +1196,7 @@ private fun ComposerDock(
     selectedThreadId: String?,
     composerInput: String,
     onComposerInputChange: (String) -> Unit,
+    dockCollapsedSide: String,
     voiceDraftText: String,
     onVoiceDraftTextChange: (String) -> Unit,
     mediaAttachments: List<TurnImageAttachment>,
@@ -1161,6 +1215,7 @@ private fun ComposerDock(
     queuePaused: Boolean,
     steeringQueuedDraftId: String?,
     isRunning: Boolean,
+    isDispatching: Boolean,
     onQueuePausedChange: (Boolean) -> Unit,
     onAttachGallery: () -> Unit,
     onAttachCamera: () -> Unit,
@@ -1191,24 +1246,35 @@ private fun ComposerDock(
     var showModelMenu by rememberSaveable { mutableStateOf(false) }
     var showReasoningMenu by rememberSaveable { mutableStateOf(false) }
     var isInputFocused by rememberSaveable { mutableStateOf(false) }
-    val hasSendPayload = composerInput.isNotBlank()
-        || mediaAttachments.isNotEmpty()
-        || subagentsArmed
-        || armedReviewTarget != null
-    val canStopDirectly = selectedThreadId != null && isRunning && !hasSendPayload
+    var isCollapsed by rememberSaveable(selectedThreadId) { mutableStateOf(false) }
+    val showsPrimaryStop = !isDispatching && selectedThreadId != null && isRunning && composerInput.isBlank() && mediaAttachments.isEmpty()
 
-    Surface(
-        modifier = modifier.navigationBarsPadding(),
-        color = MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
-        tonalElevation = 2.dp,
-        shadowElevation = 8.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+    LaunchedEffect(isInputFocused, composerInput, isRunning, isDispatching, showAdvancedActions, showModelMenu, showReasoningMenu) {
+        if (isInputFocused || composerInput.isNotBlank() || isDispatching || showAdvancedActions || showModelMenu || showReasoningMenu) {
+            isCollapsed = false
+        } else if (!isRunning) {
+            isCollapsed = true
+        }
+    }
+
+    Box(modifier = modifier.navigationBarsPadding()) {
+        AnimatedVisibility(
+            visible = !isCollapsed,
+            enter = fadeIn(animationSpec = tween(220)) + expandVertically(animationSpec = tween(220)),
+            exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(animationSpec = tween(180))
         ) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
+                tonalElevation = 2.dp,
+                shadowElevation = 8.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
             if (queuedDrafts.isNotEmpty()) {
                 Column(
                     modifier = Modifier
@@ -1376,6 +1442,14 @@ private fun ComposerDock(
                             modifier = Modifier.padding(horizontal = 12.dp)
                         )
                     }
+                    if (isDispatching) {
+                        Text(
+                            text = "Sending to Codex...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
 
                     if (voiceDraftText.isNotBlank()) {
                         OutlinedTextField(
@@ -1399,6 +1473,7 @@ private fun ComposerDock(
                             onValueChange = onComposerInputChange,
                             placeholder = { Text("Ask anything... @files, \$skills, /commands") },
                             textStyle = MaterialTheme.typography.bodyMedium,
+                            enabled = !isDispatching,
                             modifier = Modifier
                                 .weight(1f)
                                 .onFocusChanged { focusState ->
@@ -1453,8 +1528,8 @@ private fun ComposerDock(
                         showAdvancedActions = showAdvancedActions,
                         showModelMenu = showModelMenu,
                         showReasoningMenu = showReasoningMenu,
-                        canStopDirectly = canStopDirectly,
-                        canQueue = isRunning && hasSendPayload,
+                        isDispatching = isDispatching,
+                        showsPrimaryStop = showsPrimaryStop,
                         onToggleAdvancedActions = { showAdvancedActions = !showAdvancedActions },
                         onToggleModelMenu = {
                             showModelMenu = !showModelMenu
@@ -1476,19 +1551,28 @@ private fun ComposerDock(
                 }
             }
 
-            if (!isInputFocused) {
-                ComposerSecondaryBar(
-                    selectedBranch = selectedBranch,
-                    hasBranch = selectedBranch.isNotBlank(),
-                    rateLimitInfo = rateLimitInfo,
-                    ciStatus = ciStatus,
-                    onRefreshStatus = {
-                        if (canStopDirectly) {
-                            onStop()
-                        }
-                    }
-                )
+                }
             }
+        }
+        if (!isInputFocused && isCollapsed) {
+            CollapsedComposerHandle(
+                modifier = Modifier.align(
+                    if (dockCollapsedSide.equals("left", ignoreCase = true)) Alignment.BottomStart else Alignment.BottomEnd
+                ),
+                onExpand = { isCollapsed = false }
+            )
+        } else if (!isInputFocused) {
+            ComposerSecondaryBar(
+                selectedBranch = selectedBranch,
+                hasBranch = selectedBranch.isNotBlank(),
+                rateLimitInfo = rateLimitInfo,
+                ciStatus = ciStatus,
+                onRefreshStatus = {
+                    if (showsPrimaryStop) {
+                        onStop()
+                    }
+                }
+            )
         }
     }
 }
@@ -1535,8 +1619,8 @@ private fun ComposerBottomBar(
     showAdvancedActions: Boolean,
     showModelMenu: Boolean,
     showReasoningMenu: Boolean,
-    canStopDirectly: Boolean,
-    canQueue: Boolean,
+    isDispatching: Boolean,
+    showsPrimaryStop: Boolean,
     onToggleAdvancedActions: () -> Unit,
     onToggleModelMenu: () -> Unit,
     onToggleReasoningMenu: () -> Unit,
@@ -1555,31 +1639,97 @@ private fun ComposerBottomBar(
         ComposerCircleButton(
             label = if (showAdvancedActions) "-" else "+",
             filled = false,
-            onClick = onToggleAdvancedActions
+            onClick = onToggleAdvancedActions,
+            enabled = !isDispatching
         )
         ComposerMenuPill(
             title = selectedModel,
             selected = showModelMenu,
-            onClick = onToggleModelMenu
+            onClick = { if (!isDispatching) onToggleModelMenu() }
         )
         ComposerMenuPill(
             title = selectedReasoningEffort,
             selected = showReasoningMenu,
-            onClick = onToggleReasoningMenu
+            onClick = { if (!isDispatching) onToggleReasoningMenu() }
         )
         Spacer(modifier = Modifier.weight(1f))
         if (queuePaused && queuedCount > 0) {
             ComposerCircleButton(label = "R", filled = false, onClick = onResumeQueue)
         }
-        ComposerCircleButton(label = "Mic", filled = false, onClick = onUseVoiceDraft)
-        if (canStopDirectly) {
-            ComposerCircleButton(label = "Stop", filled = true, onClick = onStop)
-        }
+        ComposerCircleButton(label = "Mic", filled = false, onClick = onUseVoiceDraft, enabled = !isDispatching)
         ComposerCircleButton(
-            label = if (canQueue) "Queue" else "Up",
+            label = when {
+                isDispatching -> "..."
+                showsPrimaryStop -> "Stop"
+                else -> "Up"
+            },
             filled = true,
-            onClick = onSend
+            onClick = if (isDispatching) ({}) else if (showsPrimaryStop) onStop else onSend,
+            enabled = !isDispatching || showsPrimaryStop
         )
+    }
+}
+
+@Composable
+private fun CollapsedComposerHandle(
+    modifier: Modifier = Modifier,
+    onExpand: () -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .padding(horizontal = 12.dp, vertical = 18.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onExpand),
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 6.dp,
+        shadowElevation = 12.dp
+    ) {
+        Text(
+            text = "Compose",
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
+private fun TimelineScrubber(
+    modifier: Modifier = Modifier,
+    count: Int,
+    onPositionChanged: (Float) -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .pointerInput(count) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        onPositionChanged((offset.y / size.height).coerceIn(0f, 1f))
+                    },
+                    onDrag = { change, _ ->
+                        onPositionChanged((change.position.y / size.height).coerceIn(0f, 1f))
+                    }
+                )
+            }
+            .clickable { onPositionChanged(1f) },
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            repeat(count.coerceAtMost(18)) {
+                Text(
+                    text = "•",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
     }
 }
 
@@ -1627,17 +1777,22 @@ private fun ComposerCircleButton(
     label: String,
     filled: Boolean,
     onClick: () -> Unit,
-    compact: Boolean = false
+    compact: Boolean = false,
+    enabled: Boolean = true
 ) {
     Surface(
         modifier = Modifier
             .clip(RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick),
+            .clickable(enabled = enabled, onClick = onClick),
         shape = RoundedCornerShape(999.dp),
-        color = if (filled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f),
+        color = if (filled) {
+            if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.48f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.78f else 0.42f)
+        },
         border = if (filled) null else androidx.compose.foundation.BorderStroke(
             1.dp,
-            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+            MaterialTheme.colorScheme.outline.copy(alpha = if (enabled) 0.6f else 0.3f)
         )
     ) {
         Text(
@@ -1647,7 +1802,11 @@ private fun ComposerCircleButton(
                 vertical = if (compact) 8.dp else 9.dp
             ),
             style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
-            color = if (filled) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface,
+            color = if (filled) {
+                MaterialTheme.colorScheme.surface.copy(alpha = if (enabled) 1f else 0.78f)
+            } else {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.58f)
+            },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -1756,6 +1915,16 @@ private fun buildComposerPayloadText(
     } else {
         "$SUBAGENTS_CANNED_PROMPT\n\n$normalized"
     }
+}
+
+private fun middleClip(value: String, maxChars: Int): String {
+    if (value.length <= maxChars || maxChars < 8) {
+        return value
+    }
+    val keep = (maxChars - 1) / 2
+    val start = value.take(keep)
+    val end = value.takeLast(maxChars - keep - 1)
+    return "$start…$end"
 }
 
 private fun Bitmap.toJpegDataUrl(quality: Int = 85): String {

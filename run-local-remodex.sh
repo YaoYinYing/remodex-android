@@ -312,6 +312,7 @@ start_bridge() {
   # the LAN-reachable host in QR payloads for phone pairing.
   REMODEX_RELAY="ws://${RELAY_BRIDGE_HOST}:${RELAY_PORT}/relay" \
   REMODEX_PAIRING_RELAY="ws://${RELAY_HOSTNAME}:${RELAY_PORT}/relay" \
+  REMODEX_REFRESH_ENABLED="${REMODEX_REFRESH_ENABLED:-1}" \
   node ./bin/remodex.js run &
   BRIDGE_PID=$!
 }

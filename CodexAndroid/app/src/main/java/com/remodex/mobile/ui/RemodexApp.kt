@@ -35,6 +35,7 @@ private const val PREF_FONT_STYLE = "fontStyle"
 private const val PREF_TONE_MODE = "toneMode"
 private const val PREF_LOGGER_LEVEL = "loggerLevel"
 private const val PREF_LOGGER_MAX_LINES = "loggerMaxLines"
+private const val PREF_DOCK_COLLAPSED_SIDE = "dockCollapsedSide"
 private const val LOGGER_UNLOCK_TAP_COUNT = 7
 private const val LOGGER_UNLOCK_WINDOW_MS = 4_000L
 
@@ -96,6 +97,9 @@ fun RemodexApp(
     var loggerMaxLines by rememberSaveable {
         mutableStateOf(prefs.getInt(PREF_LOGGER_MAX_LINES, 3_000).coerceIn(200, 20_000))
     }
+    var dockCollapsedSide by rememberSaveable {
+        mutableStateOf(prefs.getString(PREF_DOCK_COLLAPSED_SIDE, "right") ?: "right")
+    }
     var showLoggerView by rememberSaveable { mutableStateOf(false) }
     var forcePairingView by rememberSaveable { mutableStateOf(false) }
     var showSettingsRoute by rememberSaveable { mutableStateOf(false) }
@@ -127,7 +131,7 @@ fun RemodexApp(
     var checkoutBranch by rememberSaveable { mutableStateOf("") }
     var composerInput by rememberSaveable { mutableStateOf("") }
 
-    LaunchedEffect(hasSeenOnboarding, hasProAccess, fontStyleRaw, toneModeRaw, loggerLevelRaw, loggerMaxLines) {
+    LaunchedEffect(hasSeenOnboarding, hasProAccess, fontStyleRaw, toneModeRaw, loggerLevelRaw, loggerMaxLines, dockCollapsedSide) {
         prefs.edit()
             .putBoolean(PREF_HAS_SEEN_ONBOARDING, hasSeenOnboarding)
             .putBoolean(PREF_HAS_PRO_ACCESS, hasProAccess)
@@ -135,6 +139,7 @@ fun RemodexApp(
             .putString(PREF_TONE_MODE, toneModeRaw)
             .putString(PREF_LOGGER_LEVEL, loggerLevelRaw)
             .putInt(PREF_LOGGER_MAX_LINES, loggerMaxLines)
+            .putString(PREF_DOCK_COLLAPSED_SIDE, dockCollapsedSide)
             .apply()
     }
 
@@ -276,6 +281,7 @@ fun RemodexApp(
                         onOpenSettings = { showSettingsRoute = true },
                         onOpenPairing = { forcePairingView = true },
                         onHeaderTap = onHeaderTap,
+                        dockCollapsedSide = dockCollapsedSide,
                         gitActionStatus = gitActionStatus,
                         voiceRecoverySnapshot = voiceRecoverySnapshot,
                         onVoiceRecoveryAction = {
@@ -315,12 +321,14 @@ fun RemodexApp(
                         toneMode = toneMode,
                         loggerLevel = loggerLevel,
                         loggerMaxLines = loggerMaxLines,
+                        dockCollapsedSide = dockCollapsedSide,
                         onClose = { showSettingsRoute = false },
                         onRequestNotificationPermission = onRequestNotificationPermission,
                         onFontStyleChanged = { style -> fontStyleRaw = style.storageValue },
                         onToneModeChanged = { mode -> toneModeRaw = mode.name },
                         onLoggerLevelChanged = { level -> loggerLevelRaw = level.name },
                         onLoggerMaxLinesChanged = { maxLines -> loggerMaxLines = maxLines.coerceIn(200, 20_000) },
+                        onDockCollapsedSideChanged = { side -> dockCollapsedSide = side },
                         onSwitchModel = { model ->
                             scope.launch { runCatching { service.switchModel(model) } }
                         },

@@ -5,10 +5,10 @@ Source-of-truth:
 - website claims from `https://www.phodex.app/` (live control, git, secure pairing, `@files/$skills//commands`, steering, desktop sync)
 
 Completion rule:
-- This iteration is complete only when all `TODO-01` to `TODO-39` are `DONE`.
+- This iteration is complete only when all `TODO-01` to `TODO-43` are `DONE`.
 
 Gate status:
-- `TODO-01` to `TODO-39`: `DONE` (revalidated on 2026-04-01 after another turn-flow parity pass for composer shell and dock structure)
+- `TODO-01` to `TODO-43`: `DONE` (revalidated on 2026-04-02 after the beyond-parity refresh for supplemental CI, scrubber, foldable dock, and settings polish)
 
 | TODO | Scope | iOS / Website basis | Verification | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -51,6 +51,10 @@ Gate status:
 | TODO-37 | Recovery empty-state/help parity | `TurnConversationContainerView.swift`, `GPTVoiceSetupSheet.swift` | Instrumentation + runtime UI | recovery accessories replace the generic empty-state card and voice help opens setup guidance | DONE |
 | TODO-38 | Composer card structure parity | `TurnComposerView.swift`, `TurnComposerHostView.swift` | Instrumentation + screenshot | accessory chips, input field, and runtime controls now live in one composer card in the same high-level order as iOS | DONE |
 | TODO-39 | Composer bottom-bar parity | `ComposerBottomBar.swift`, `TurnComposerSecondaryBar.swift` | Instrumentation + screenshot | dock now uses compact runtime menus on the left, voice/stop/send controls on the right, and a lighter status row below | DONE |
+| TODO-40 | Supplemental thread CI parity | `GitActionsService.swift` remote URL flow + public provider fallback | Unit + runtime refresh | bridge CI remains primary, but repo-bound threads can fall back to public GitHub/GitLab pipeline APIs when the bridge has no CI result | DONE |
+| TODO-41 | Conversation scrubber and title marquee | iOS turn-header treatment + dense timeline navigation intent | Instrumentation + live ADB | long titles scroll in place and the side scrubber jumps across user-message anchors | DONE |
+| TODO-42 | Foldable composer dock | iOS composer shell adapted with Android-specific fold/minimize behavior | Instrumentation + screenshot | unfocused composer collapses to a side handle, keeps one-button send/stop behavior, and respects dock-side preference | DONE |
+| TODO-43 | Settings and diagnostics polish | `SettingsView.swift` visual system | Instrumentation + screenshot | dark-mode settings contrast, font previews, and icon-style logger controls all use the shared theme tokens | DONE |
 
 ## Evidence Pack
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`
@@ -59,8 +63,6 @@ Gate status:
 - `bash CodexAndroid/scripts/logger_db_self_test.sh --device 192.168.31.185:43277`
 
 ## Backlog (Non-iOS Custom Ideas, Deferred)
-- Genie-style minimized composer with dock-side pinning.
-- Marquee/scrolling workspace title behavior.
-- One-button compact composer mode variant.
+- Genie-style minimized composer animation refinement beyond the current Compose-safe fold/collapse.
 - Full-text conversation indexing/search (repo path, title, content).
-- Remote CI status ingestion from public GitHub/GitLab APIs.
+- Public CI coverage beyond GitHub/GitLab.

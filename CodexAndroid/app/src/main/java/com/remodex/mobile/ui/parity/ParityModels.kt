@@ -340,6 +340,38 @@ val WebsiteFeatureTodos = listOf(
         iosReference = "ComposerBottomBar.swift + TurnComposerSecondaryBar.swift",
         websiteClaim = "Runtime selection and send controls should match the iOS dock rhythm.",
         defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-40",
+        title = "Supplemental thread CI parity",
+        detail = "When the local bridge does not expose CI state, fall back to public GitHub or GitLab pipeline APIs for the selected repo-bound thread only.",
+        iosReference = "GitActionsService remoteUrl + thread-scoped git context",
+        websiteClaim = "CI/CD visibility should stay attached to the active project thread instead of becoming a global app state.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-41",
+        title = "Conversation scrubber and title marquee",
+        detail = "Add long-title marquee behavior in the workspace header and a message-position scrubber keyed to user messages in the active conversation.",
+        iosReference = "Turn view title treatment + dense timeline navigation intent",
+        websiteClaim = "Long-running chats should remain readable and quickly navigable.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-42",
+        title = "Foldable composer dock",
+        detail = "Allow the composer to collapse to a side handle when unfocused, preserve the compact one-button send-or-stop behavior, and keep dock-side preference in settings.",
+        iosReference = "TurnComposerHostView adapted with Android-specific dock folding",
+        websiteClaim = "The composer should stay compact when idle without losing quick access.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-43",
+        title = "Settings and diagnostics polish",
+        detail = "Keep settings readable in dark mode, show font previews on font choices, and switch logger levels with compact icon controls.",
+        iosReference = "SettingsView visual system",
+        websiteClaim = "Preferences and diagnostics should look intentional instead of developer-only.",
+        defaultState = TodoState.DONE
     )
 )
 
@@ -538,6 +570,26 @@ val ParityAcceptanceMatrix = listOf(
         todoId = "TODO-39",
         verification = "Instrumentation + screenshot",
         evidence = "The dock uses compact left-side menus, right-side voice or stop or send controls, and a lighter secondary meta row below."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-40",
+        verification = "Unit + runtime refresh",
+        evidence = "CI status stays hidden for non-repo threads and falls back to public GitHub or GitLab APIs only for repo-bound threads."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-41",
+        verification = "Instrumentation + live ADB",
+        evidence = "Long titles scroll in the header and the side scrubber jumps through user-message anchors."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-42",
+        verification = "Instrumentation + screenshot",
+        evidence = "Composer collapses to a side handle when idle and re-expands into the compact dock structure."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-43",
+        verification = "Instrumentation + screenshot",
+        evidence = "Dark settings panels, font previews, and icon-style logger controls render with the shared theme tokens."
     )
 )
 

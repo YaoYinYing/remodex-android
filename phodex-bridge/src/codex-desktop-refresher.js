@@ -556,8 +556,9 @@ function readBridgeConfig({
     env
   );
   const explicitRefreshEnabled = readOptionalBooleanEnv(["REMODEX_REFRESH_ENABLED"], env);
-  // Desktop refresh is opt-in for now because Codex.app still lacks true live updates.
-  const defaultRefreshEnabled = false;
+  // Keep local source checkouts live by default so phone-authored messages
+  // become visible in Codex.app during local relay sessions.
+  const defaultRefreshEnabled = sourceCheckout;
   return {
     relayUrl,
     pairingRelayUrl,

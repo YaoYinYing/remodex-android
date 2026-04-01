@@ -7,6 +7,9 @@ import com.remodex.mobile.ui.parity.TodoState
 import com.remodex.mobile.ui.parity.WebsiteFeatureTodos
 import com.remodex.mobile.ui.parity.advanceNextTodo
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -14,6 +17,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CodexServiceTest {
+    private val json = Json { ignoreUnknownKeys = true }
+
     @Test
     fun connectWithFixtureLoadsThreadsAndTimeline() = runBlocking {
         val service = CodexService()
@@ -280,6 +285,69 @@ class CodexServiceTest {
     }
 
     @Test
+    fun parsesGitHubRemoteDescriptorForSupplementalCi() {
+        val descriptor = parseGitRemoteDescriptor(
+            rawUrl = "git@github.com:openai/remodex.git"
+        )
+
+        assertNotNull(descriptor)
+        assertEquals(CiProvider.GITHUB, descriptor?.provider)
+        assertEquals("openai/remodex", descriptor?.ownerRepo)
+    }
+
+    @Test
+    fun parsesGitLabRemoteDescriptorForSupplementalCi() {
+        val descriptor = parseGitRemoteDescriptor(
+            rawUrl = "https://gitlab.com/openai/remodex.git"
+        )
+
+        assertNotNull(descriptor)
+        assertEquals(CiProvider.GITLAB, descriptor?.provider)
+        assertEquals("openai/remodex", descriptor?.ownerRepo)
+    }
+
+    @Test
+    fun formatsGitHubActionsStatusSummary() {
+        val payload = json.parseToJsonElement(
+            """
+            {
+              "workflow_runs": [
+                {
+                  "name": "android-ci",
+                  "status": "completed",
+                  "conclusion": "success"
+                }
+              ]
+            }
+            """.trimIndent()
+        ) as JsonObject
+
+        val status = formatGitHubActionsStatus(payload)
+
+        assertEquals("CI status: success (android-ci · GitHub)", status?.summary)
+        assertTrue(status?.isTerminal == true)
+    }
+
+    @Test
+    fun formatsGitLabPipelineStatusSummary() {
+        val payload = json.parseToJsonElement(
+            """
+            [
+              {
+                "name": "android-ci",
+                "status": "running"
+              }
+            ]
+            """.trimIndent()
+        ) as JsonArray
+
+        val status = formatGitLabPipelineStatus(payload)
+
+        assertEquals("CI status: running (android-ci · GitLab)", status?.summary)
+        assertTrue(status?.isTerminal == false)
+    }
+
+    @Test
     fun switchModelAndGrantPermissionInFixtureMode() = runBlocking {
         val service = CodexService()
         service.rememberPairing(
@@ -415,10 +483,10 @@ class CodexServiceTest {
 
     @Test
     fun parityTodoGateContainsCanonicalEntriesWithMatchingAcceptanceRows() {
-        assertEquals(39, WebsiteFeatureTodos.size)
-        assertEquals(39, ParityAcceptanceMatrix.size)
+        assertEquals(43, WebsiteFeatureTodos.size)
+        assertEquals(43, ParityAcceptanceMatrix.size)
         assertEquals(
-            (1..39).map { "TODO-%02d".format(it) }.toSet(),
+            (1..43).map { "TODO-%02d".format(it) }.toSet(),
             WebsiteFeatureTodos.map { it.id }.toSet()
         )
         assertEquals(

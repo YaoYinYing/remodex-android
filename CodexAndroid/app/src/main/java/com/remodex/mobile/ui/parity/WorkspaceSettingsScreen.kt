@@ -20,12 +20,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.BridgeManagedAccountStatus
 import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
+import com.remodex.mobile.ui.theme.remodexFontSet
 
 @Composable
 fun WorkspaceSettingsScreen(
@@ -50,12 +52,14 @@ fun WorkspaceSettingsScreen(
     toneMode: AppToneMode,
     loggerLevel: LoggerLevel,
     loggerMaxLines: Int,
+    dockCollapsedSide: String,
     onClose: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
     onFontStyleChanged: (AppFontStyle) -> Unit,
     onToneModeChanged: (AppToneMode) -> Unit,
     onLoggerLevelChanged: (LoggerLevel) -> Unit,
     onLoggerMaxLinesChanged: (Int) -> Unit,
+    onDockCollapsedSideChanged: (String) -> Unit,
     onSwitchModel: (String) -> Unit,
     onSwitchReasoningEffort: (String) -> Unit,
     onDisconnect: () -> Unit,
@@ -109,23 +113,15 @@ fun WorkspaceSettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.SYSTEM) }, modifier = Modifier.weight(1f)) {
-                        Text("System")
-                    }
-                    OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST) }, modifier = Modifier.weight(1f)) {
-                        Text("Geist")
-                    }
+                    FontPreviewButton(style = AppFontStyle.SYSTEM, selectedStyle = fontStyle, onFontStyleChanged = onFontStyleChanged, modifier = Modifier.weight(1f))
+                    FontPreviewButton(style = AppFontStyle.GEIST, selectedStyle = fontStyle, onFontStyleChanged = onFontStyleChanged, modifier = Modifier.weight(1f))
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.GEIST_MONO) }, modifier = Modifier.weight(1f)) {
-                        Text("Geist Mono")
-                    }
-                    OutlinedButton(onClick = { onFontStyleChanged(AppFontStyle.JETBRAINS_MONO) }, modifier = Modifier.weight(1f)) {
-                        Text("JetBrains Mono")
-                    }
+                    FontPreviewButton(style = AppFontStyle.GEIST_MONO, selectedStyle = fontStyle, onFontStyleChanged = onFontStyleChanged, modifier = Modifier.weight(1f))
+                    FontPreviewButton(style = AppFontStyle.JETBRAINS_MONO, selectedStyle = fontStyle, onFontStyleChanged = onFontStyleChanged, modifier = Modifier.weight(1f))
                 }
                 SettingsRow(
                     title = "Tone",
@@ -256,6 +252,21 @@ fun WorkspaceSettingsScreen(
                 }
                 SettingsRow(title = "Speed", value = "Normal")
                 SettingsRow(title = "Access", value = "Workspace write")
+                SettingsRow(
+                    title = "Collapsed dock side",
+                    value = dockCollapsedSide.replaceFirstChar { it.uppercase() }
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(onClick = { onDockCollapsedSideChanged("left") }, modifier = Modifier.weight(1f)) {
+                        Text("Left")
+                    }
+                    OutlinedButton(onClick = { onDockCollapsedSideChanged("right") }, modifier = Modifier.weight(1f)) {
+                        Text("Right")
+                    }
+                }
             }
         }
         item {
@@ -275,7 +286,9 @@ fun WorkspaceSettingsScreen(
         item {
             SettingsPanel(title = "Usage") {
                 SettingsRow(title = "Rate limits", value = rateLimitInfo)
-                SettingsRow(title = "CI/CD", value = ciStatus.ifBlank { "Unavailable for current thread" })
+                if (ciStatus.isNotBlank()) {
+                    SettingsRow(title = "CI/CD", value = ciStatus)
+                }
             }
         }
         item {
@@ -336,18 +349,10 @@ fun WorkspaceSettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.DEBUG) }, modifier = Modifier.weight(1f)) {
-                        Text("Debug")
-                    }
-                    OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.INFO) }, modifier = Modifier.weight(1f)) {
-                        Text("Info")
-                    }
-                    OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.WARN) }, modifier = Modifier.weight(1f)) {
-                        Text("Warn")
-                    }
-                    OutlinedButton(onClick = { onLoggerLevelChanged(LoggerLevel.ERROR) }, modifier = Modifier.weight(1f)) {
-                        Text("Error")
-                    }
+                    LoggerLevelButton(icon = "·", label = "Debug", selected = loggerLevel == LoggerLevel.DEBUG, onClick = { onLoggerLevelChanged(LoggerLevel.DEBUG) }, modifier = Modifier.weight(1f))
+                    LoggerLevelButton(icon = "i", label = "Info", selected = loggerLevel == LoggerLevel.INFO, onClick = { onLoggerLevelChanged(LoggerLevel.INFO) }, modifier = Modifier.weight(1f))
+                    LoggerLevelButton(icon = "!", label = "Warn", selected = loggerLevel == LoggerLevel.WARN, onClick = { onLoggerLevelChanged(LoggerLevel.WARN) }, modifier = Modifier.weight(1f))
+                    LoggerLevelButton(icon = "x", label = "Error", selected = loggerLevel == LoggerLevel.ERROR, onClick = { onLoggerLevelChanged(LoggerLevel.ERROR) }, modifier = Modifier.weight(1f))
                 }
                 SettingsRow(title = "Logger max lines", value = loggerMaxLines.toString())
                 Row(
@@ -390,14 +395,14 @@ private fun SettingsPanel(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surface
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         width = 1.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
                         shape = RoundedCornerShape(20.dp)
                     )
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
@@ -406,6 +411,50 @@ private fun SettingsPanel(
             ) {
                 content()
             }
+        }
+    }
+}
+
+@Composable
+private fun FontPreviewButton(
+    style: AppFontStyle,
+    selectedStyle: AppFontStyle,
+    onFontStyleChanged: (AppFontStyle) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val fontSet = remodexFontSet(style)
+    OutlinedButton(onClick = { onFontStyleChanged(style) }, modifier = modifier) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                text = style.title,
+                fontFamily = fontSet.prose,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = if (selectedStyle == style) "Selected" else "Preview",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoggerLevelButton(
+    icon: String,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedButton(onClick = onClick, modifier = modifier) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = icon, style = MaterialTheme.typography.titleMedium)
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

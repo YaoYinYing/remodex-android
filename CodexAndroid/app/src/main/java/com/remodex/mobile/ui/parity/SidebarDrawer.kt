@@ -350,6 +350,6 @@ private fun SidebarIdentityHeader(onOpenSettings: () -> Unit) {
             )
         }
         Spacer(modifier = Modifier.weight(1f))
-        SmallChip(text = "Settings", selected = false, onClick = onOpenSettings)
+        SmallChip(text = "⚙", selected = false, onClick = onOpenSettings)
     }
 }

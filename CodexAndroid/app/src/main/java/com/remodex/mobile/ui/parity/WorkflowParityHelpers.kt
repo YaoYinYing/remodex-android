@@ -32,9 +32,12 @@ fun groupThreadsByProject(
         threads
     } else {
         threads.filter { thread ->
+            val projectPath = thread.cwd?.lowercase().orEmpty()
+            val projectLabel = projectLabelForPath(normalizeProjectPath(thread.cwd)).lowercase()
             thread.displayTitle.lowercase().contains(normalizedQuery)
                 || thread.preview?.lowercase()?.contains(normalizedQuery) == true
-                || thread.cwd?.lowercase()?.contains(normalizedQuery) == true
+                || projectPath.contains(normalizedQuery)
+                || projectLabel.contains(normalizedQuery)
         }
     }
 

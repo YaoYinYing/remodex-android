@@ -12,6 +12,7 @@ import com.remodex.mobile.service.transport.FixtureRpcTransport
 import com.remodex.mobile.service.transport.RealSecureRelayRpcTransport
 import com.remodex.mobile.service.transport.RpcTransport
 import com.remodex.mobile.service.transport.RpcTransportParser
+import java.io.IOException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,6 +23,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -29,6 +32,8 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 sealed interface ConnectionState {
     data object Disconnected : ConnectionState
@@ -211,6 +216,8 @@ class CodexService(
     private val resumedThreadIds = mutableSetOf<String>()
     private val sessionInitMutex = Mutex()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val ciHttpClient = OkHttpClient()
+    private val ciJson = Json { ignoreUnknownKeys = true }
     private var rpcTransport: RpcTransport = fixtureTransportFactory()
     private var activeTransportLabel: String = "none"
     private var activeConnectionMode: ConnectionMode = ConnectionMode.NONE
@@ -1384,6 +1391,14 @@ class CodexService(
 
         while (true) {
             try {
+                runCatching { openThread(threadId, silentStatus = true) }
+                    .onFailure { error ->
+                        AppLogger.warn(
+                            LOG_TAG,
+                            "thread/read refresh before turn/start failed for thread=$threadId.",
+                            error
+                        )
+                    }
                 ensureThreadResumed(threadId = threadId, force = true)
                 val response = requestTurnStart(
                     threadId = threadId,
@@ -1410,6 +1425,7 @@ class CodexService(
                 if (recoveryCount >= maxRecoveries) {
                     throw error
                 }
+                runCatching { refreshThreads(silentStatus = true, includeTimeline = false) }
                 AppLogger.warn(
                     LOG_TAG,
                     "turn/start lifecycle reported missing thread=$threadId; creating continuation thread."
@@ -1547,6 +1563,14 @@ class CodexService(
                 AppLogger.warn(
                     LOG_TAG,
                     "turn/start succeeded but thread/read refresh failed for thread=$threadId.",
+                    error
+                )
+            }
+        runCatching { refreshActiveThreadTimeline(silentStatus = true) }
+            .onFailure { error ->
+                AppLogger.warn(
+                    LOG_TAG,
+                    "turn/start succeeded but timeline refresh failed for thread=$threadId.",
                     error
                 )
             }
@@ -2538,6 +2562,23 @@ class CodexService(
             params = buildGitParams(gitScope)
         )
         if (responsePair == null) {
+            val supplementalStatus = runCatching { fetchSupplementalCiStatus(gitScope) }
+                .onFailure { AppLogger.warn(LOG_TAG, "Supplemental CI lookup failed: ${it.javaClass.simpleName}") }
+                .getOrNull()
+            if (supplementalStatus != null) {
+                _ciStatus.value = supplementalStatus.summary
+                if (supplementalStatus.isTerminal) {
+                    publishEvent(
+                        kind = ServiceEventKind.CI_CD_DONE,
+                        title = "CI/CD Updated",
+                        message = supplementalStatus.summary
+                    )
+                }
+                if (!silentStatus) {
+                    setStatus("CI status refreshed via supplemental provider API.")
+                }
+                return
+            }
             _ciStatus.value = ""
             if (!silentStatus) {
                 setStatus("CI status unavailable for this repository.")
@@ -2793,6 +2834,70 @@ class CodexService(
     private fun parseGitRepoRoot(result: JsonObject): String? {
         val statusObject = (result["status"] as? JsonObject) ?: result
         return statusObject.string("repoRoot", "repo_root", "cwd", "working_directory")
+    }
+
+    private suspend fun fetchSupplementalCiStatus(gitScope: GitScope): SupplementalCiStatus? {
+        val remote = fetchGitRemoteDescriptor(gitScope) ?: return null
+        return when (remote.provider) {
+            CiProvider.GITHUB -> fetchGitHubCiStatus(remote)
+            CiProvider.GITLAB -> fetchGitLabCiStatus(remote)
+        }
+    }
+
+    private suspend fun fetchGitRemoteDescriptor(gitScope: GitScope): GitRemoteDescriptor? {
+        val responsePair = requestFirstAvailable(
+            methods = listOf("git/remoteUrl"),
+            params = buildGitParams(gitScope)
+        ) ?: return null
+        val result = responsePair.second.result as? JsonObject ?: return null
+        return parseGitRemoteDescriptor(
+            rawUrl = result.string("url", "remoteUrl", "remote_url"),
+            ownerRepoHint = result.string("ownerRepo", "owner_repo")
+        )
+    }
+
+    private suspend fun fetchGitHubCiStatus(remote: GitRemoteDescriptor): SupplementalCiStatus? {
+        return fetchSupplementalCiJson(buildGitHubActionsUrl(remote.ownerRepo)) { body ->
+            val root = ciJson.parseToJsonElement(body) as? JsonObject ?: return@fetchSupplementalCiJson null
+            formatGitHubActionsStatus(root)
+        }
+    }
+
+    private suspend fun fetchGitLabCiStatus(remote: GitRemoteDescriptor): SupplementalCiStatus? {
+        return fetchSupplementalCiJson(buildGitLabPipelinesUrl(remote.ownerRepo)) { body ->
+            val root = ciJson.parseToJsonElement(body) as? JsonArray ?: return@fetchSupplementalCiJson null
+            formatGitLabPipelineStatus(root)
+        }
+    }
+
+    private suspend fun fetchSupplementalCiJson(
+        url: String,
+        parser: (String) -> SupplementalCiStatus?
+    ): SupplementalCiStatus? = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .header("User-Agent", "Remodex-Android")
+            .build()
+        runCatching {
+            ciHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext null
+                }
+                val body = response.body?.string()?.trim().orEmpty()
+                if (body.isEmpty()) {
+                    return@withContext null
+                }
+                parser(body)
+            }
+        }.recoverCatching { error ->
+            if (error is IOException) {
+                AppLogger.info(LOG_TAG, "CI provider request skipped: ${error.javaClass.simpleName}")
+                null
+            } else {
+                throw error
+            }
+        }.getOrNull()
     }
 
     private fun parseGitBranches(result: JsonObject): List<String> {
