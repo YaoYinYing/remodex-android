@@ -30,7 +30,7 @@ const HANDSHAKE_MODE_TRUSTED_RECONNECT = "trusted_reconnect";
 const SECURE_SENDER_MAC = "mac";
 const SECURE_SENDER_IPHONE = "iphone";
 const SECURE_SENDER_ANDROID = "android";
-const MAX_PAIRING_AGE_MS = 5 * 60 * 1000;
+const DEFAULT_PAIRING_AGE_MS = 5 * 60 * 1000;
 const MAX_BRIDGE_OUTBOUND_MESSAGES = 500;
 const MAX_BRIDGE_OUTBOUND_BYTES = 10 * 1024 * 1024;
 
@@ -38,6 +38,7 @@ function createBridgeSecureTransport({
   sessionId,
   relayUrl,
   deviceState,
+  pairingMaxAgeMs = DEFAULT_PAIRING_AGE_MS,
   onTrustedPhoneUpdate = null,
 }) {
   let currentDeviceState = deviceState;
@@ -47,14 +48,17 @@ function createBridgeSecureTransport({
   // Tracks the highest bridge seq the phone has definitely acked, so replay
   // decisions never depend on best-effort local socket writes.
   let lastRelayedBridgeOutboundSeq = 0;
-  let currentPairingExpiresAt = Date.now() + MAX_PAIRING_AGE_MS;
+  const resolvedPairingMaxAgeMs = Number.isFinite(pairingMaxAgeMs) && pairingMaxAgeMs > 0
+    ? Math.floor(pairingMaxAgeMs)
+    : DEFAULT_PAIRING_AGE_MS;
+  let currentPairingExpiresAt = Date.now() + resolvedPairingMaxAgeMs;
   let nextKeyEpoch = 1;
   let nextBridgeOutboundSeq = 1;
   let outboundBufferBytes = 0;
   const outboundBuffer = [];
 
   function createPairingPayload() {
-    currentPairingExpiresAt = Date.now() + MAX_PAIRING_AGE_MS;
+    currentPairingExpiresAt = Date.now() + resolvedPairingMaxAgeMs;
     return {
       v: PAIRING_QR_VERSION,
       relay: relayUrl,

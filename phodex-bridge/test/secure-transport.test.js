@@ -61,6 +61,32 @@ test("secure transport rejects plaintext JSON-RPC before the secure handshake", 
   assert.equal(controlMessages[0]?.code, "update_required");
 });
 
+test("secure transport uses the configured pairing TTL for QR expiry", () => {
+  const identity = createOkpKeyPair("ed25519");
+  const startedAt = 1_700_000_000_000;
+  const originalNow = Date.now;
+  Date.now = () => startedAt;
+
+  try {
+    const secureTransport = createBridgeSecureTransport({
+      sessionId: "session-ttl",
+      relayUrl: "ws://localhost:9000/relay",
+      pairingMaxAgeMs: 30 * 60 * 1000,
+      deviceState: {
+        macDeviceId: "mac-ttl",
+        macIdentityPrivateKey: identity.privateKey,
+        macIdentityPublicKey: identity.publicKey,
+        trustedPhones: {},
+      },
+    });
+
+    const payload = secureTransport.createPairingPayload();
+    assert.equal(payload.expiresAt, startedAt + (30 * 60 * 1000));
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
 test("secure transport round-trips encrypted payloads after a trusted reconnect handshake", () => {
   const macIdentity = createOkpKeyPair("ed25519");
   const phoneIdentity = createOkpKeyPair("ed25519");

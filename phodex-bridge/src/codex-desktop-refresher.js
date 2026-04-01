@@ -114,7 +114,6 @@ class CodexDesktopRefresher {
       this.pendingNewThread = true;
       this.mode = "pending_new_thread";
       this.clearPendingTarget();
-      this.scheduleNewThreadFallback();
       return;
     }
   }
@@ -453,25 +452,9 @@ class CodexDesktopRefresher {
     if (event.reason !== "growth") {
       return;
     }
-
     if (previousSize == null) {
-      this.queueRefresh("rollout_growth", {
-        threadId: event.threadId,
-        url: buildThreadDeepLink(event.threadId),
-      }, "rollout first-growth");
       this.lastMidRunRefreshAt = this.now();
-      return;
     }
-
-    if (this.now() - this.lastMidRunRefreshAt < this.midRunRefreshThrottleMs) {
-      return;
-    }
-
-    this.lastMidRunRefreshAt = this.now();
-    this.queueRefresh("rollout_growth", {
-      threadId: event.threadId,
-      url: buildThreadDeepLink(event.threadId),
-    }, "rollout mid-run");
   }
 
   log(message) {
@@ -616,6 +599,14 @@ function readBridgeConfig({
         env
       ),
       DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS
+    ),
+    pairingQrTtlMs: parseIntegerEnv(
+      readFirstDefinedEnv(
+        ["REMODEX_PAIRING_TTL_MS", "REMODEX_PAIRING_MAX_AGE_MS"],
+        String(5 * 60 * 1000),
+        env
+      ),
+      5 * 60 * 1000
     ),
     codexEndpoint,
     refreshCommand,

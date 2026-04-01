@@ -387,6 +387,7 @@ fun WorkspaceScreen(
                     },
                     onDisconnect = {
                         scope.launch { runCatching { service.disconnect() } }
+                        onOpenPairing()
                     }
                 )
             }
@@ -1606,7 +1607,7 @@ private fun ComposerSecondaryBar(
         val statusLabel = when {
             ciStatus.isNotBlank() -> ciStatus.removePrefix("CI status: ").trim()
             else -> rateLimitInfo.removePrefix("Rate limit: ").trim()
-        }.take(28)
+        }
         Spacer(modifier = Modifier.weight(1f))
         ComposerCircleButton(
             label = statusLabel.ifBlank { "Status" },

@@ -111,6 +111,7 @@ test("readBridgeConfig parses refresh timing overrides", () => {
       REMODEX_REFRESH_MIDRUN_THROTTLE_MS: "12000",
       REMODEX_REFRESH_ROLLOUT_LOOKUP_TIMEOUT_MS: "6000",
       REMODEX_REFRESH_ROLLOUT_IDLE_TIMEOUT_MS: "15000",
+      REMODEX_PAIRING_TTL_MS: "1800000",
     },
     runtimeRoot: "/workspace/phodex-bridge",
     fsImpl: {
@@ -125,6 +126,7 @@ test("readBridgeConfig parses refresh timing overrides", () => {
   assert.equal(config.refreshMidRunThrottleMs, 12000);
   assert.equal(config.refreshRolloutLookupTimeoutMs, 6000);
   assert.equal(config.refreshRolloutIdleTimeoutMs, 15000);
+  assert.equal(config.pairingQrTtlMs, 1800000);
 });
 
 test("readBridgeConfig uses only the packaged relay default outside a source checkout", () => {
@@ -331,7 +333,7 @@ test("turn/start without a thread id waits for turn/started before refreshing th
   refresher.handleTransportReset();
 });
 
-test("rollout growth refreshes are throttled during long runs", async () => {
+test("rollout growth no longer triggers mid-run refreshes", async () => {
   const refreshCalls = [];
   let watcherHooks = null;
   let currentTime = 0;
@@ -366,9 +368,8 @@ test("rollout growth refreshes are throttled during long runs", async () => {
     size: 10,
   });
   await wait(10);
-  assert.deepEqual(refreshCalls, ["codex://threads/thread-456"]);
+  assert.deepEqual(refreshCalls, []);
 
-  refreshCalls.length = 0;
   currentTime = 2_000;
   watcherHooks.onEvent({
     reason: "growth",
@@ -385,7 +386,7 @@ test("rollout growth refreshes are throttled during long runs", async () => {
     size: 20,
   });
   await wait(10);
-  assert.deepEqual(refreshCalls, ["codex://threads/thread-456"]);
+  assert.deepEqual(refreshCalls, []);
 });
 
 test("turn/completed bypasses duplicate-target dedupe and still stops the watcher", async () => {

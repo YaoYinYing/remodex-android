@@ -3099,13 +3099,7 @@ class CodexService(
                 compareBy<RateLimitSummaryRow>({ it.windowDurationMins ?: Int.MAX_VALUE }, { it.label.lowercase() })
             )
             val summary = sortedRows.take(2).joinToString(" · ") { row ->
-                buildString {
-                    append(row.label)
-                    append(' ')
-                    append(row.remainingPercent)
-                    append("% left")
-                    row.resetsAtEpochSeconds?.let { append(" @").append(it) }
-                }
+                "${row.label} ${row.remainingPercent}% left"
             }
             return "Rate limit: $summary" to sortedRows.minOfOrNull { it.remainingPercent }
         }

@@ -371,6 +371,7 @@ fun RemodexApp(
                         onDisconnect = {
                             scope.launch { runCatching { service.disconnect() } }
                             showSettingsRoute = false
+                            forcePairingView = true
                         },
                         onRefreshBridgeManagedState = {
                             scope.launch { runCatching { service.refreshBridgeManagedState(allowAvailableBridgeUpdatePrompt = true) } }

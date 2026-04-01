@@ -135,6 +135,7 @@ function startBridge({
     sessionId,
     relayUrl: pairingRelayBaseUrl || relayBaseUrl,
     deviceState,
+    pairingMaxAgeMs: config.pairingQrTtlMs,
     onTrustedPhoneUpdate(nextDeviceState) {
       deviceState = nextDeviceState;
       sendRelayRegistrationUpdate(nextDeviceState);
