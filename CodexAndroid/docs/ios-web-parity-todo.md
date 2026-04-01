@@ -5,10 +5,10 @@ Source-of-truth:
 - website claims from `https://www.phodex.app/` (live control, git, secure pairing, `@files/$skills//commands`, steering, desktop sync)
 
 Completion rule:
-- This iteration is complete only when all `TODO-01` to `TODO-37` are `DONE`.
+- This iteration is complete only when all `TODO-01` to `TODO-39` are `DONE`.
 
 Gate status:
-- `TODO-01` to `TODO-37`: `DONE` (revalidated on 2026-04-01 after another turn-flow parity pass for composer sizing and recovery guidance)
+- `TODO-01` to `TODO-39`: `DONE` (revalidated on 2026-04-01 after another turn-flow parity pass for composer shell and dock structure)
 
 | TODO | Scope | iOS / Website basis | Verification | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -49,6 +49,8 @@ Gate status:
 | TODO-35 | Foreground bridge version refresh parity | `SettingsView.swift`, `CodexService+Account.swift` | Foreground/settings refresh | bridge version state refreshes independently on foreground return and settings refresh | DONE |
 | TODO-36 | Composer input sizing parity | `TurnComposerInputTextView.swift` | Instrumentation + screenshot | composer now uses a tighter 1-4 line growth range and body-sized text closer to iOS | DONE |
 | TODO-37 | Recovery empty-state/help parity | `TurnConversationContainerView.swift`, `GPTVoiceSetupSheet.swift` | Instrumentation + runtime UI | recovery accessories replace the generic empty-state card and voice help opens setup guidance | DONE |
+| TODO-38 | Composer card structure parity | `TurnComposerView.swift`, `TurnComposerHostView.swift` | Instrumentation + screenshot | accessory chips, input field, and runtime controls now live in one composer card in the same high-level order as iOS | DONE |
+| TODO-39 | Composer bottom-bar parity | `ComposerBottomBar.swift`, `TurnComposerSecondaryBar.swift` | Instrumentation + screenshot | dock now uses compact runtime menus on the left, voice/stop/send controls on the right, and a lighter status row below | DONE |
 
 ## Evidence Pack
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`

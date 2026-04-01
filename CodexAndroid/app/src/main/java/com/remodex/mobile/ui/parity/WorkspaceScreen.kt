@@ -1249,63 +1249,6 @@ private fun ComposerDock(
                 }
             }
 
-            if (
-                mediaAttachments.isNotEmpty()
-                || mentionedFiles.isNotEmpty()
-                || mentionedSkills.isNotEmpty()
-                || subagentsArmed
-                || armedReviewTarget != null
-            ) {
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    mediaAttachments.forEach { attachment ->
-                        SmallChip(
-                            text = attachment.label ?: "image",
-                            selected = true,
-                            onClick = { onRemoveAttachment(attachment) }
-                        )
-                    }
-                    mentionedFiles.forEach { mention ->
-                        SmallChip(
-                            text = "@${mention.substringAfterLast('/')}",
-                            selected = true,
-                            onClick = { onRemoveMentionedFile(mention) }
-                        )
-                    }
-                    mentionedSkills.forEach { skill ->
-                        SmallChip(
-                            text = "\$${skill.name}",
-                            selected = true,
-                            onClick = { onRemoveMentionedSkill(skill) }
-                        )
-                    }
-                    if (subagentsArmed) {
-                        SmallChip(
-                            text = "/subagents",
-                            selected = true,
-                            onClick = onClearSubagentsArmed
-                        )
-                    }
-                    armedReviewTarget?.let { target ->
-                        SmallChip(
-                            text = reviewTargetChipLabel(target),
-                            selected = true,
-                            onClick = onClearReviewTarget
-                        )
-                    }
-                }
-            }
-
-            if (!attachmentHint.isNullOrBlank()) {
-                Text(
-                    text = attachmentHint,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-
             if (showForkDestinationSuggestions) {
                 SuggestionTray(
                     labels = listOf("Fork into local", "Fork into new worktree", "Cancel"),
@@ -1374,45 +1317,95 @@ private fun ComposerDock(
                         .padding(top = 10.dp, bottom = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
+                    if (
+                        mediaAttachments.isNotEmpty()
+                        || mentionedFiles.isNotEmpty()
+                        || mentionedSkills.isNotEmpty()
+                        || subagentsArmed
+                        || armedReviewTarget != null
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            mediaAttachments.forEach { attachment ->
+                                SmallChip(
+                                    text = attachment.label ?: "image",
+                                    selected = true,
+                                    onClick = { onRemoveAttachment(attachment) }
+                                )
+                            }
+                            mentionedFiles.forEach { mention ->
+                                SmallChip(
+                                    text = "@${mention.substringAfterLast('/')}",
+                                    selected = true,
+                                    onClick = { onRemoveMentionedFile(mention) }
+                                )
+                            }
+                            mentionedSkills.forEach { skill ->
+                                SmallChip(
+                                    text = "\$${skill.name}",
+                                    selected = true,
+                                    onClick = { onRemoveMentionedSkill(skill) }
+                                )
+                            }
+                            if (subagentsArmed) {
+                                SmallChip(
+                                    text = "/subagents",
+                                    selected = true,
+                                    onClick = onClearSubagentsArmed
+                                )
+                            }
+                            armedReviewTarget?.let { target ->
+                                SmallChip(
+                                    text = reviewTargetChipLabel(target),
+                                    selected = true,
+                                    onClick = onClearReviewTarget
+                                )
+                            }
+                        }
+                    }
+
+                    if (!attachmentHint.isNullOrBlank()) {
+                        Text(
+                            text = attachmentHint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = 12.dp)
+                        )
+                    }
+
+                    if (voiceDraftText.isNotBlank()) {
+                        OutlinedTextField(
+                            value = voiceDraftText,
+                            onValueChange = onVoiceDraftTextChange,
+                            label = { Text("Voice draft") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp)
+                        )
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.Bottom
                     ) {
-                        CompactToolbarButton(
-                            label = if (showAdvancedActions) "-" else "+",
-                            onClick = { showAdvancedActions = !showAdvancedActions }
-                        )
-                        SmallChip(
-                            text = selectedModel,
-                            selected = true,
-                            onClick = {
-                                showModelMenu = !showModelMenu
-                                if (showModelMenu) {
-                                    showReasoningMenu = false
-                                }
-                            }
-                        )
-                        SmallChip(
-                            text = selectedReasoningEffort,
-                            selected = true,
-                            onClick = {
-                                showReasoningMenu = !showReasoningMenu
-                                if (showReasoningMenu) {
-                                    showModelMenu = false
-                                }
-                            }
-                        )
-                        Spacer(modifier = Modifier.weight(1f))
-                        CompactToolbarButton(label = "Mic", onClick = onUseVoiceDraft)
-                        if (canStopDirectly) {
-                            CompactToolbarButton(label = "Stop", onClick = onStop)
-                        }
-                        CompactToolbarButton(
-                            label = if (isRunning && hasSendPayload) "Queue" else "Up",
-                            onClick = onSend
+                        OutlinedTextField(
+                            value = composerInput,
+                            onValueChange = onComposerInputChange,
+                            placeholder = { Text("Ask anything... @files, \$skills, /commands") },
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier
+                                .weight(1f)
+                                .onFocusChanged { focusState ->
+                                    isInputFocused = focusState.isFocused
+                                },
+                            minLines = 1,
+                            maxLines = 4
                         )
                     }
                     if (showModelMenu && availableModels.isNotEmpty()) {
@@ -1438,39 +1431,48 @@ private fun ComposerDock(
                             modifier = Modifier.padding(horizontal = 12.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CompactToolbarButton(label = "Gallery", onClick = onAttachGallery, modifier = Modifier.weight(1f))
-                            CompactToolbarButton(label = "Camera", onClick = onAttachCamera, modifier = Modifier.weight(1f))
+                            ComposerMenuPill(
+                                title = "Photo library",
+                                selected = false,
+                                onClick = onAttachGallery,
+                                modifier = Modifier.weight(1f)
+                            )
+                            ComposerMenuPill(
+                                title = "Take photo",
+                                selected = false,
+                                onClick = onAttachCamera,
+                                modifier = Modifier.weight(1f)
+                            )
                         }
                     }
-                    if (voiceDraftText.isNotBlank()) {
-                        OutlinedTextField(
-                            value = voiceDraftText,
-                            onValueChange = onVoiceDraftTextChange,
-                            label = { Text("Voice draft") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        OutlinedTextField(
-                            value = composerInput,
-                            onValueChange = onComposerInputChange,
-                            label = { Text("Ask anything... @files, \$skills, /commands") },
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier
-                                .weight(1f)
-                                .onFocusChanged { focusState ->
-                                    isInputFocused = focusState.isFocused
-                                },
-                            minLines = 1,
-                            maxLines = 4
-                        )
-                    }
+                    ComposerBottomBar(
+                        selectedModel = selectedModel,
+                        selectedReasoningEffort = selectedReasoningEffort,
+                        queuePaused = queuePaused,
+                        queuedCount = queuedDrafts.size,
+                        showAdvancedActions = showAdvancedActions,
+                        showModelMenu = showModelMenu,
+                        showReasoningMenu = showReasoningMenu,
+                        canStopDirectly = canStopDirectly,
+                        canQueue = isRunning && hasSendPayload,
+                        onToggleAdvancedActions = { showAdvancedActions = !showAdvancedActions },
+                        onToggleModelMenu = {
+                            showModelMenu = !showModelMenu
+                            if (showModelMenu) {
+                                showReasoningMenu = false
+                            }
+                        },
+                        onToggleReasoningMenu = {
+                            showReasoningMenu = !showReasoningMenu
+                            if (showReasoningMenu) {
+                                showModelMenu = false
+                            }
+                        },
+                        onResumeQueue = { onQueuePausedChange(false) },
+                        onUseVoiceDraft = onUseVoiceDraft,
+                        onStop = onStop,
+                        onSend = onSend
+                    )
                 }
             }
 
@@ -1506,19 +1508,148 @@ private fun ComposerSecondaryBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        SmallChip(text = "Local", selected = false, onClick = {})
-        SmallChip(text = "Workspace", selected = false, onClick = {})
+        ComposerMenuPill(title = "Local", selected = false, onClick = {})
         if (hasBranch) {
-            SmallChip(text = selectedBranch, selected = true, onClick = {})
+            ComposerMenuPill(title = selectedBranch, selected = true, onClick = {})
         }
         val statusLabel = when {
             ciStatus.isNotBlank() -> ciStatus.removePrefix("CI status: ").trim()
             else -> rateLimitInfo.removePrefix("Rate limit: ").trim()
         }.take(28)
         Spacer(modifier = Modifier.weight(1f))
-        CompactToolbarButton(
+        ComposerCircleButton(
             label = statusLabel.ifBlank { "Status" },
-            onClick = onRefreshStatus
+            filled = false,
+            onClick = onRefreshStatus,
+            compact = true
+        )
+    }
+}
+
+@Composable
+private fun ComposerBottomBar(
+    selectedModel: String,
+    selectedReasoningEffort: String,
+    queuePaused: Boolean,
+    queuedCount: Int,
+    showAdvancedActions: Boolean,
+    showModelMenu: Boolean,
+    showReasoningMenu: Boolean,
+    canStopDirectly: Boolean,
+    canQueue: Boolean,
+    onToggleAdvancedActions: () -> Unit,
+    onToggleModelMenu: () -> Unit,
+    onToggleReasoningMenu: () -> Unit,
+    onResumeQueue: () -> Unit,
+    onUseVoiceDraft: () -> Unit,
+    onStop: () -> Unit,
+    onSend: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        ComposerCircleButton(
+            label = if (showAdvancedActions) "-" else "+",
+            filled = false,
+            onClick = onToggleAdvancedActions
+        )
+        ComposerMenuPill(
+            title = selectedModel,
+            selected = showModelMenu,
+            onClick = onToggleModelMenu
+        )
+        ComposerMenuPill(
+            title = selectedReasoningEffort,
+            selected = showReasoningMenu,
+            onClick = onToggleReasoningMenu
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        if (queuePaused && queuedCount > 0) {
+            ComposerCircleButton(label = "R", filled = false, onClick = onResumeQueue)
+        }
+        ComposerCircleButton(label = "Mic", filled = false, onClick = onUseVoiceDraft)
+        if (canStopDirectly) {
+            ComposerCircleButton(label = "Stop", filled = true, onClick = onStop)
+        }
+        ComposerCircleButton(
+            label = if (canQueue) "Queue" else "Up",
+            filled = true,
+            onClick = onSend
+        )
+    }
+}
+
+@Composable
+private fun ComposerMenuPill(
+    title: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = if (selected) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        } else {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+        }
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "v",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun ComposerCircleButton(
+    label: String,
+    filled: Boolean,
+    onClick: () -> Unit,
+    compact: Boolean = false
+) {
+    Surface(
+        modifier = Modifier
+            .clip(RoundedCornerShape(999.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(999.dp),
+        color = if (filled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.78f),
+        border = if (filled) null else androidx.compose.foundation.BorderStroke(
+            1.dp,
+            MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+        )
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(
+                horizontal = if (compact) 12.dp else 11.dp,
+                vertical = if (compact) 8.dp else 9.dp
+            ),
+            style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+            color = if (filled) MaterialTheme.colorScheme.surface else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }

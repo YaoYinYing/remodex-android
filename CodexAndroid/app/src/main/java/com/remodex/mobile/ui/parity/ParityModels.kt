@@ -324,6 +324,22 @@ val WebsiteFeatureTodos = listOf(
         iosReference = "TurnConversationContainerView.swift + GPTVoiceSetupSheet.swift",
         websiteClaim = "Recovery should guide the user instead of stacking generic status chrome.",
         defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-38",
+        title = "Composer card structure parity",
+        detail = "Keep the Android composer arranged like iOS: accessory stack, compact input field, then embedded runtime controls in one card instead of separate generic form rows.",
+        iosReference = "TurnComposerView.swift + TurnComposerHostView.swift",
+        websiteClaim = "The message composer should feel like the shipped iOS dock rather than a generic Android form.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-39",
+        title = "Composer bottom-bar parity",
+        detail = "Mirror the iOS bottom-bar grouping with compact runtime menus on the left, voice or stop or send controls on the right, and a lighter secondary status row below.",
+        iosReference = "ComposerBottomBar.swift + TurnComposerSecondaryBar.swift",
+        websiteClaim = "Runtime selection and send controls should match the iOS dock rhythm.",
+        defaultState = TodoState.DONE
     )
 )
 
@@ -512,6 +528,16 @@ val ParityAcceptanceMatrix = listOf(
         todoId = "TODO-37",
         verification = "Instrumentation + runtime UI",
         evidence = "Recovery cards suppress the generic empty conversation card and the voice help action opens setup guidance."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-38",
+        verification = "Instrumentation + screenshot",
+        evidence = "Accessory chips, input, and runtime controls now live in a single composer card with the same high-level order as iOS."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-39",
+        verification = "Instrumentation + screenshot",
+        evidence = "The dock uses compact left-side menus, right-side voice or stop or send controls, and a lighter secondary meta row below."
     )
 )
 
