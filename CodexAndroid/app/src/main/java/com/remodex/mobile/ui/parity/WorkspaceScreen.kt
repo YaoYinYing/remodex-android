@@ -563,6 +563,15 @@ fun WorkspaceScreen(
                                     onTriggerVoiceRecovery()
                                 }
                             },
+                            onCheckRateLimits = {
+                                scope.launch {
+                                    runCatching {
+                                        service.refreshRateLimitInfo(silentStatus = false)
+                                    }.onFailure {
+                                        attachmentHint = it.message ?: "Failed to refresh rate limits."
+                                    }
+                                }
+                            },
                             onSwitchModel = onSwitchModel,
                             onSwitchReasoningEffort = onSwitchReasoningEffort,
                             onRemoveAttachment = { attachment ->
@@ -1220,6 +1229,7 @@ private fun ComposerDock(
     onAttachGallery: () -> Unit,
     onAttachCamera: () -> Unit,
     onUseVoiceDraft: () -> Unit,
+    onCheckRateLimits: () -> Unit,
     onSwitchModel: (String) -> Unit,
     onSwitchReasoningEffort: (String) -> Unit,
     onRemoveAttachment: (TurnImageAttachment) -> Unit,
@@ -1545,6 +1555,7 @@ private fun ComposerDock(
                         },
                         onResumeQueue = { onQueuePausedChange(false) },
                         onUseVoiceDraft = onUseVoiceDraft,
+                        onCheckRateLimits = onCheckRateLimits,
                         onStop = onStop,
                         onSend = onSend
                     )
@@ -1567,11 +1578,7 @@ private fun ComposerDock(
                 hasBranch = selectedBranch.isNotBlank(),
                 rateLimitInfo = rateLimitInfo,
                 ciStatus = ciStatus,
-                onRefreshStatus = {
-                    if (showsPrimaryStop) {
-                        onStop()
-                    }
-                }
+                onRefreshStatus = onCheckRateLimits
             )
         }
     }
@@ -1626,6 +1633,7 @@ private fun ComposerBottomBar(
     onToggleReasoningMenu: () -> Unit,
     onResumeQueue: () -> Unit,
     onUseVoiceDraft: () -> Unit,
+    onCheckRateLimits: () -> Unit,
     onStop: () -> Unit,
     onSend: () -> Unit
 ) {
@@ -1651,6 +1659,13 @@ private fun ComposerBottomBar(
             title = selectedReasoningEffort,
             selected = showReasoningMenu,
             onClick = { if (!isDispatching) onToggleReasoningMenu() }
+        )
+        ComposerCircleButton(
+            label = "RL",
+            filled = false,
+            onClick = onCheckRateLimits,
+            enabled = !isDispatching,
+            compact = true
         )
         Spacer(modifier = Modifier.weight(1f))
         if (queuePaused && queuedCount > 0) {

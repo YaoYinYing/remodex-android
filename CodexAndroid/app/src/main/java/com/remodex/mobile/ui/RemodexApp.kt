@@ -1,6 +1,9 @@
 package com.remodex.mobile.ui
 
+import android.app.Activity
 import android.content.Context
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -38,6 +41,7 @@ private const val PREF_LOGGER_MAX_LINES = "loggerMaxLines"
 private const val PREF_DOCK_COLLAPSED_SIDE = "dockCollapsedSide"
 private const val LOGGER_UNLOCK_TAP_COUNT = 7
 private const val LOGGER_UNLOCK_WINDOW_MS = 4_000L
+private const val EXIT_CONFIRM_WINDOW_MS = 2_000L
 
 private enum class AppGate {
     ONBOARDING,
@@ -54,6 +58,7 @@ fun RemodexApp(
     onRequestNotificationPermission: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
     val prefs = remember(context) { context.getSharedPreferences(UI_PREFS, Context.MODE_PRIVATE) }
 
     val connectionState by service.connectionState.collectAsState()
@@ -103,6 +108,7 @@ fun RemodexApp(
     var showLoggerView by rememberSaveable { mutableStateOf(false) }
     var forcePairingView by rememberSaveable { mutableStateOf(false) }
     var showSettingsRoute by rememberSaveable { mutableStateOf(false) }
+    var lastBackAt by rememberSaveable { mutableLongStateOf(0L) }
     val headerTapTimes = remember { ArrayDeque<Long>() }
 
     val fontStyle = AppFontStyle.fromStorage(fontStyleRaw)
@@ -183,6 +189,33 @@ fun RemodexApp(
     }
 
     val effectiveToneMode = if (gate == AppGate.ONBOARDING) AppToneMode.FORCE_DARK else toneMode
+
+    BackHandler(enabled = true) {
+        when {
+            showLoggerView -> {
+                showLoggerView = false
+            }
+            showSettingsRoute -> {
+                showSettingsRoute = false
+            }
+            gate == AppGate.PAIRING && hasSavedPairing -> {
+                forcePairingView = false
+            }
+            gate == AppGate.WORKSPACE || (gate == AppGate.PAIRING && hasSavedPairing) -> {
+                val now = System.currentTimeMillis()
+                if (now - lastBackAt <= EXIT_CONFIRM_WINDOW_MS) {
+                    activity?.finish()
+                } else {
+                    lastBackAt = now
+                    Toast.makeText(context, "Swipe back again to exit Remodex.", Toast.LENGTH_SHORT).show()
+                }
+            }
+            else -> {
+                activity?.finish()
+            }
+        }
+    }
+
     RemodexTheme(
         fontStyle = fontStyle,
         toneMode = effectiveToneMode
