@@ -1,6 +1,7 @@
 package com.remodex.mobile.ui.parity
 
 import com.remodex.mobile.model.ThreadSummary
+import com.remodex.mobile.model.normalizeFilesystemProjectPath
 
 enum class ThreadProjectGroupKind {
     PROJECT,
@@ -226,18 +227,7 @@ fun filterComposerCommands(
 }
 
 private fun normalizeProjectPath(path: String?): String? {
-    val trimmed = path?.trim().orEmpty()
-    if (trimmed.isEmpty()) {
-        return null
-    }
-    if (trimmed == "/") {
-        return trimmed
-    }
-    var normalized = trimmed
-    while (normalized.endsWith("/")) {
-        normalized = normalized.dropLast(1)
-    }
-    return normalized.ifEmpty { "/" }
+    return normalizeFilesystemProjectPath(path)
 }
 
 private fun projectLabelForPath(path: String?): String {

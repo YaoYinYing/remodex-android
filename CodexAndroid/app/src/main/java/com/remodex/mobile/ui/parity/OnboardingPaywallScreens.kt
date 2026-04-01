@@ -23,6 +23,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -30,6 +31,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -111,6 +115,7 @@ private val paywallFeatures = listOf(
 fun OnboardingScreen(onContinue: () -> Unit) {
     val pagerState = rememberPagerState(initialPage = 0) { 5 }
     val scope = rememberCoroutineScope()
+    var showCodexInstallReminder by remember { mutableStateOf(false) }
 
     Box(
         modifier = Modifier
@@ -135,10 +140,34 @@ fun OnboardingScreen(onContinue: () -> Unit) {
                 currentPage = pagerState.currentPage,
                 pageCount = 5,
                 onContinue = {
-                    if (pagerState.currentPage < 4) {
+                    if (pagerState.currentPage == 2) {
+                        showCodexInstallReminder = true
+                    } else if (pagerState.currentPage < 4) {
                         scope.launch { pagerState.scrollToPage(pagerState.currentPage + 1) }
                     } else {
                         onContinue()
+                    }
+                }
+            )
+        }
+        if (showCodexInstallReminder) {
+            AlertDialog(
+                onDismissRequest = { showCodexInstallReminder = false },
+                title = { Text("Install Codex CLI First") },
+                text = {
+                    Text("Copy and paste \"npm install -g @openai/codex@latest\" on your Mac before moving on. Remodex will not work until Codex CLI is installed and available in your PATH.")
+                },
+                dismissButton = {
+                    OutlinedButton(onClick = { showCodexInstallReminder = false }) {
+                        Text("Stay Here")
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showCodexInstallReminder = false
+                        scope.launch { pagerState.scrollToPage(3) }
+                    }) {
+                        Text("Continue Anyway")
                     }
                 }
             )

@@ -1,6 +1,7 @@
 package com.remodex.mobile.service
 
 import com.remodex.mobile.service.push.PushRegistrationPayload
+import com.remodex.mobile.model.normalizeFilesystemProjectPath
 import com.remodex.mobile.ui.parity.ParityAcceptanceMatrix
 import com.remodex.mobile.ui.parity.TodoState
 import com.remodex.mobile.ui.parity.WebsiteFeatureTodos
@@ -8,6 +9,7 @@ import com.remodex.mobile.ui.parity.advanceNextTodo
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -325,6 +327,35 @@ class CodexServiceTest {
     }
 
     @Test
+    fun normalizeProjectPathSkipsPseudoProjectBucketPath() {
+        assertNull(normalizeFilesystemProjectPath("server"))
+        assertNull(normalizeFilesystemProjectPath("_default"))
+        assertEquals("~/", normalizeFilesystemProjectPath("~/"))
+        assertEquals("C:/", normalizeFilesystemProjectPath("C:/"))
+    }
+
+    @Test
+    fun fixtureBridgeManagedStateLoadsAccountAndBridgeVersions() = runBlocking {
+        val service = CodexService()
+        service.rememberPairing(
+            PairingPayload(
+                sessionId = "session-test",
+                relayUrl = "ws://127.0.0.1:8765/relay",
+                macDeviceId = "mac-test",
+                macIdentityPublicKey = "bWFjLWlkZW50aXR5LXB1YmxpYy1rZXktMQ==",
+                expiresAt = System.currentTimeMillis() + 300_000L
+            )
+        )
+        service.connectWithFixture()
+        service.refreshBridgeManagedState()
+
+        assertEquals(BridgeManagedAccountStatus.AUTHENTICATED, service.gptAccountStatus.value)
+        assertEquals("fixture@example.com", service.gptAccountEmail.value)
+        assertEquals("1.3.7", service.bridgeInstalledVersion.value)
+        assertEquals("1.3.8", service.latestBridgePackageVersion.value)
+    }
+
+    @Test
     fun fuzzyFileAndSkillsSourcesReturnFixtureData() = runBlocking {
         val service = CodexService()
         service.rememberPairing(
@@ -384,10 +415,10 @@ class CodexServiceTest {
 
     @Test
     fun parityTodoGateContainsCanonicalEntriesWithMatchingAcceptanceRows() {
-        assertEquals(29, WebsiteFeatureTodos.size)
-        assertEquals(29, ParityAcceptanceMatrix.size)
+        assertEquals(35, WebsiteFeatureTodos.size)
+        assertEquals(35, ParityAcceptanceMatrix.size)
         assertEquals(
-            (1..29).map { "TODO-%02d".format(it) }.toSet(),
+            (1..35).map { "TODO-%02d".format(it) }.toSet(),
             WebsiteFeatureTodos.map { it.id }.toSet()
         )
         assertEquals(

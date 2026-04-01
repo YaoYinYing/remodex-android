@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.service.ConnectionState
+import com.remodex.mobile.service.BridgeManagedAccountStatus
 import com.remodex.mobile.service.logging.LoggerLevel
 import com.remodex.mobile.ui.theme.AppFontStyle
 import com.remodex.mobile.ui.theme.AppToneMode
@@ -41,6 +42,10 @@ fun WorkspaceSettingsScreen(
     notificationsEnabled: Boolean,
     rateLimitInfo: String,
     ciStatus: String,
+    bridgeInstalledVersion: String?,
+    latestBridgePackageVersion: String?,
+    gptAccountStatus: BridgeManagedAccountStatus,
+    gptAccountEmail: String?,
     fontStyle: AppFontStyle,
     toneMode: AppToneMode,
     loggerLevel: LoggerLevel,
@@ -54,6 +59,7 @@ fun WorkspaceSettingsScreen(
     onSwitchModel: (String) -> Unit,
     onSwitchReasoningEffort: (String) -> Unit,
     onDisconnect: () -> Unit,
+    onRefreshBridgeManagedState: () -> Unit,
     onForgetPair: () -> Unit
 ) {
     LazyColumn(
@@ -166,13 +172,25 @@ fun WorkspaceSettingsScreen(
             SettingsPanel(title = "ChatGPT") {
                 SettingsRow(
                     title = "Status",
-                    value = "Unavailable"
+                    value = when (gptAccountStatus) {
+                        BridgeManagedAccountStatus.AUTHENTICATED -> "Connected"
+                        BridgeManagedAccountStatus.NOT_LOGGED_IN -> "Not logged in"
+                        BridgeManagedAccountStatus.LOGIN_IN_PROGRESS -> "Syncing"
+                        BridgeManagedAccountStatus.REAUTH_REQUIRED -> "Needs reauth"
+                        BridgeManagedAccountStatus.UNKNOWN -> "Unknown"
+                    }
                 )
+                if (!gptAccountEmail.isNullOrBlank()) {
+                    SettingsRow(title = "Account", value = gptAccountEmail)
+                }
                 Text(
-                    text = "This mobile client keeps local bridge parity. GPT account state is managed on the paired desktop bridge.",
+                    text = "ChatGPT voice/account state is managed on the paired Mac bridge and mirrored here for recovery guidance.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                OutlinedButton(onClick = onRefreshBridgeManagedState, modifier = Modifier.fillMaxWidth()) {
+                    Text("Refresh Status")
+                }
             }
         }
         item {
@@ -190,14 +208,16 @@ fun WorkspaceSettingsScreen(
         }
         item {
             SettingsPanel(title = "Bridge Version") {
-                val installedVersion = "0.1.0"
-                SettingsRow(title = "Installed on device", value = installedVersion)
-                SettingsRow(title = "Latest available", value = "Unknown")
+                SettingsRow(title = "Installed on Mac", value = bridgeInstalledVersion ?: "Unknown")
+                SettingsRow(title = "Latest available", value = latestBridgePackageVersion ?: "Unknown")
                 Text(
-                    text = "Connect to the local bridge to compare package versions.",
+                    text = "Foreground reconnect refreshes bridge package status independently from ChatGPT account state.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                OutlinedButton(onClick = onRefreshBridgeManagedState, modifier = Modifier.fillMaxWidth()) {
+                    Text("Refresh Bridge Version")
+                }
             }
         }
         item {

@@ -115,7 +115,12 @@ class ParityUiInstrumentationTest {
                     onSwitchReasoningEffort = {},
                     onOpenSettings = {},
                     onOpenPairing = {},
-                    onHeaderTap = {}
+                    onHeaderTap = {},
+                    gitActionStatus = null,
+                    voiceRecoverySnapshot = null,
+                    onVoiceRecoveryAction = {},
+                    onDismissVoiceRecovery = {},
+                    onTriggerVoiceRecovery = {}
                 )
             }
         }
@@ -157,7 +162,12 @@ class ParityUiInstrumentationTest {
                     onSwitchReasoningEffort = {},
                     onOpenSettings = { openSettingsInvoked = true },
                     onOpenPairing = {},
-                    onHeaderTap = {}
+                    onHeaderTap = {},
+                    gitActionStatus = null,
+                    voiceRecoverySnapshot = null,
+                    onVoiceRecoveryAction = {},
+                    onDismissVoiceRecovery = {},
+                    onTriggerVoiceRecovery = {}
                 )
             }
         }
@@ -267,7 +277,12 @@ class ParityUiInstrumentationTest {
             onSwitchReasoningEffort = {},
             onOpenSettings = {},
             onOpenPairing = {},
-            onHeaderTap = {}
+            onHeaderTap = {},
+            gitActionStatus = null,
+            voiceRecoverySnapshot = null,
+            onVoiceRecoveryAction = {},
+            onDismissVoiceRecovery = {},
+            onTriggerVoiceRecovery = {}
         )
     }
 

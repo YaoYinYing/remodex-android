@@ -4,6 +4,7 @@ import com.remodex.mobile.model.RpcMessage
 import com.remodex.mobile.model.RpcError
 import com.remodex.mobile.model.ThreadSummary
 import com.remodex.mobile.model.TimelineEntry
+import com.remodex.mobile.model.normalizeFilesystemProjectPath
 import com.remodex.mobile.service.logging.AppLogger
 import com.remodex.mobile.service.push.PushRegistrationPayload
 import com.remodex.mobile.service.secure.CodexSecureTransport
@@ -81,6 +82,42 @@ enum class ReviewTarget {
     BASE_BRANCH
 }
 
+enum class BridgeManagedAccountStatus {
+    UNKNOWN,
+    AUTHENTICATED,
+    NOT_LOGGED_IN,
+    LOGIN_IN_PROGRESS,
+    REAUTH_REQUIRED
+}
+
+enum class RecoveryAccessoryStatus {
+    INTERRUPTED,
+    RECONNECTING,
+    ACTION_REQUIRED,
+    SYNCING
+}
+
+data class RecoveryAccessorySnapshot(
+    val title: String,
+    val summary: String,
+    val detail: String? = null,
+    val status: RecoveryAccessoryStatus,
+    val actionLabel: String? = null
+)
+
+enum class VoiceFailureReason {
+    RECONNECT_REQUIRED,
+    BRIDGE_SESSION_UNSUPPORTED,
+    MAC_LOGIN_REQUIRED,
+    MAC_REAUTH_REQUIRED,
+    VOICE_SYNC_IN_PROGRESS,
+    CHATGPT_REQUIRED,
+    MICROPHONE_PERMISSION_REQUIRED,
+    MICROPHONE_UNAVAILABLE,
+    RECORDER_UNAVAILABLE,
+    GENERIC
+}
+
 class CodexService(
     private val secureTransport: CodexSecureTransport = CodexSecureTransport(),
     private val parser: RpcTransportParser = RpcTransportParser(),
@@ -144,6 +181,24 @@ class CodexService(
     private val _ciStatus = MutableStateFlow("")
     val ciStatus: StateFlow<String> = _ciStatus
 
+    private val _gitActionStatus = MutableStateFlow<String?>(null)
+    val gitActionStatus: StateFlow<String?> = _gitActionStatus
+
+    private val _bridgeInstalledVersion = MutableStateFlow<String?>(null)
+    val bridgeInstalledVersion: StateFlow<String?> = _bridgeInstalledVersion
+
+    private val _latestBridgePackageVersion = MutableStateFlow<String?>(null)
+    val latestBridgePackageVersion: StateFlow<String?> = _latestBridgePackageVersion
+
+    private val _gptAccountStatus = MutableStateFlow(BridgeManagedAccountStatus.UNKNOWN)
+    val gptAccountStatus: StateFlow<BridgeManagedAccountStatus> = _gptAccountStatus
+
+    private val _gptAccountEmail = MutableStateFlow<String?>(null)
+    val gptAccountEmail: StateFlow<String?> = _gptAccountEmail
+
+    private val _voiceRecoverySnapshot = MutableStateFlow<RecoveryAccessorySnapshot?>(null)
+    val voiceRecoverySnapshot: StateFlow<RecoveryAccessorySnapshot?> = _voiceRecoverySnapshot
+
     private val _events = MutableSharedFlow<ServiceEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<ServiceEvent> = _events
 
@@ -159,6 +214,9 @@ class CodexService(
     private var rpcTransport: RpcTransport = fixtureTransportFactory()
     private var activeTransportLabel: String = "none"
     private var activeConnectionMode: ConnectionMode = ConnectionMode.NONE
+    private var supportsBridgeVoiceAuth: Boolean = true
+    private var isAppInForeground: Boolean = false
+    private var lastOptionalBridgeUpdateVersion: String? = null
 
     init {
         val persistedPairing = pairingStore?.load()
@@ -204,6 +262,13 @@ class CodexService(
         _gitStatusSummary.value = "Git status not loaded."
         _gitBranches.value = emptyList()
         _currentProjectPath.value = "Project path not resolved."
+        _gitActionStatus.value = null
+        _bridgeInstalledVersion.value = null
+        _latestBridgePackageVersion.value = null
+        _gptAccountStatus.value = BridgeManagedAccountStatus.UNKNOWN
+        _gptAccountEmail.value = null
+        _voiceRecoverySnapshot.value = null
+        supportsBridgeVoiceAuth = true
         activeTurnIdByThread.clear()
         projectPathByThread.clear()
         resumedThreadIds.clear()
@@ -277,6 +342,7 @@ class CodexService(
             runBootstrapRefresh("permissions/pending") { refreshPendingPermissions(silentStatus = true) }
             runBootstrapRefresh("models/list") { refreshModels(silentStatus = true) }
             runBootstrapRefresh("ci/status") { refreshCiStatus(silentStatus = true) }
+            runBootstrapRefresh("account/status") { refreshBridgeManagedState(allowAvailableBridgeUpdatePrompt = false) }
 
             AppLogger.info(LOG_TAG, "connect($modeLabel) completed successfully.")
             setStatus("Connected via $modeLabel.", notify = true)
@@ -285,6 +351,19 @@ class CodexService(
             AppLogger.error(LOG_TAG, "connect($modeLabel) failed.", error)
             _connectionState.value = ConnectionState.Failed(error.message ?: "Unknown connection failure.")
             setStatus("Connect failed: ${error.message ?: "unknown error"}", notify = true)
+        }
+    }
+
+    fun setForegroundState(isForeground: Boolean) {
+        val wasForeground = isAppInForeground
+        isAppInForeground = isForeground
+        if (!isForeground || wasForeground == isForeground) {
+            return
+        }
+        serviceScope.launch {
+            runCatching {
+                refreshBridgeVersionState(allowAvailableBridgeUpdatePrompt = true)
+            }
         }
     }
 
@@ -950,6 +1029,8 @@ class CodexService(
         activeConnectionMode = ConnectionMode.NONE
         _connectionState.value = ConnectionState.Paired
         _timeline.value = emptyList()
+        _voiceRecoverySnapshot.value = null
+        _gitActionStatus.value = null
         activeTurnIdByThread.clear()
         projectPathByThread.clear()
         resumedThreadIds.clear()
@@ -2100,57 +2181,62 @@ class CodexService(
             throw IllegalArgumentException("Branch is required.")
         }
         val gitScope = requireSelectedThreadGitScope()
-
-        val response = requestRpc(
-            method = "git/checkout",
-            params = JsonObject(
-                mapOf(
-                    "branch" to JsonPrimitive(normalizedBranch),
-                    "cwd" to JsonPrimitive(gitScope.cwd),
-                    "threadId" to JsonPrimitive(gitScope.threadId)
+        withGitActionProgress("Checking out $normalizedBranch…") {
+            val response = requestRpc(
+                method = "git/checkout",
+                params = JsonObject(
+                    mapOf(
+                        "branch" to JsonPrimitive(normalizedBranch),
+                        "cwd" to JsonPrimitive(gitScope.cwd),
+                        "threadId" to JsonPrimitive(gitScope.threadId)
+                    )
                 )
             )
-        )
-        throwIfRpcError(response, "git/checkout")
-        refreshGitStatus(silentStatus = true)
-        refreshGitBranches(silentStatus = true)
-        setStatus(
-            "Checked out $normalizedBranch via $activeTransportLabel.",
-            notify = true,
-            eventKind = ServiceEventKind.GIT_ACTION
-        )
+            throwIfRpcError(response, "git/checkout")
+            refreshGitStatus(silentStatus = true)
+            refreshGitBranches(silentStatus = true)
+            setStatus(
+                "Checked out $normalizedBranch via $activeTransportLabel.",
+                notify = true,
+                eventKind = ServiceEventKind.GIT_ACTION
+            )
+        }
     }
 
     suspend fun gitPull() {
         ensureConnected()
         val gitScope = requireSelectedThreadGitScope()
-        val response = requestRpc(
-            method = "git/pull",
-            params = buildGitParams(gitScope)
-        )
-        throwIfRpcError(response, "git/pull")
-        refreshGitStatus(silentStatus = true)
-        setStatus(
-            "Pulled latest changes via $activeTransportLabel.",
-            notify = true,
-            eventKind = ServiceEventKind.GIT_ACTION
-        )
+        withGitActionProgress("Pulling latest changes…") {
+            val response = requestRpc(
+                method = "git/pull",
+                params = buildGitParams(gitScope)
+            )
+            throwIfRpcError(response, "git/pull")
+            refreshGitStatus(silentStatus = true)
+            setStatus(
+                "Pulled latest changes via $activeTransportLabel.",
+                notify = true,
+                eventKind = ServiceEventKind.GIT_ACTION
+            )
+        }
     }
 
     suspend fun gitPush() {
         ensureConnected()
         val gitScope = requireSelectedThreadGitScope()
-        val response = requestRpc(
-            method = "git/push",
-            params = buildGitParams(gitScope)
-        )
-        throwIfRpcError(response, "git/push")
-        refreshGitStatus(silentStatus = true)
-        setStatus(
-            "Pushed changes via $activeTransportLabel.",
-            notify = true,
-            eventKind = ServiceEventKind.GIT_ACTION
-        )
+        withGitActionProgress("Pushing changes…") {
+            val response = requestRpc(
+                method = "git/push",
+                params = buildGitParams(gitScope)
+            )
+            throwIfRpcError(response, "git/push")
+            refreshGitStatus(silentStatus = true)
+            setStatus(
+                "Pushed changes via $activeTransportLabel.",
+                notify = true,
+                eventKind = ServiceEventKind.GIT_ACTION
+            )
+        }
     }
 
     suspend fun gitCommit(message: String?) {
@@ -2168,24 +2254,26 @@ class CodexService(
                 )
             )
         }
-        val response = requestRpc(
-            method = "git/commit",
-            params = params
-        )
-        throwIfRpcError(response, "git/commit")
-        val result = response.result as? JsonObject
-        val hash = result?.string("hash")
-        val summary = result?.string("summary")
-        refreshGitStatus(silentStatus = true)
-        setStatus(
-            if (!hash.isNullOrBlank()) {
-                "Committed $hash${if (!summary.isNullOrBlank()) " ($summary)" else ""} via $activeTransportLabel."
-            } else {
-                "Committed changes via $activeTransportLabel."
-            },
-            notify = true,
-            eventKind = ServiceEventKind.GIT_ACTION
-        )
+        withGitActionProgress("Committing changes…") {
+            val response = requestRpc(
+                method = "git/commit",
+                params = params
+            )
+            throwIfRpcError(response, "git/commit")
+            val result = response.result as? JsonObject
+            val hash = result?.string("hash")
+            val summary = result?.string("summary")
+            refreshGitStatus(silentStatus = true)
+            setStatus(
+                if (!hash.isNullOrBlank()) {
+                    "Committed $hash${if (!summary.isNullOrBlank()) " ($summary)" else ""} via $activeTransportLabel."
+                } else {
+                    "Committed changes via $activeTransportLabel."
+                },
+                notify = true,
+                eventKind = ServiceEventKind.GIT_ACTION
+            )
+        }
     }
 
     suspend fun refreshRateLimitInfo(silentStatus: Boolean = false) {
@@ -2261,6 +2349,98 @@ class CodexService(
         if (!silentStatus) {
             setStatus("Model list refreshed via $activeTransportLabel.")
         }
+    }
+
+    suspend fun refreshBridgeManagedState(allowAvailableBridgeUpdatePrompt: Boolean = false) {
+        if (_connectionState.value != ConnectionState.Connected) {
+            applyDisconnectedBridgeManagedState()
+            return
+        }
+        runCatching {
+            val payload = fetchBridgeManagedStatusSnapshot()
+            applyBridgePackageStatus(payload, allowAvailableBridgeUpdatePrompt)
+            applyBridgeManagedAccountSnapshot(payload)
+        }.onFailure {
+            applyDisconnectedBridgeManagedState()
+        }
+    }
+
+    suspend fun refreshGPTAccountState() {
+        refreshBridgeManagedState(allowAvailableBridgeUpdatePrompt = false)
+    }
+
+    suspend fun refreshBridgeVersionState(allowAvailableBridgeUpdatePrompt: Boolean = false) {
+        if (_connectionState.value != ConnectionState.Connected) {
+            return
+        }
+        runCatching {
+            val payload = fetchBridgeManagedStatusSnapshot()
+            applyBridgePackageStatus(payload, allowAvailableBridgeUpdatePrompt)
+        }
+    }
+
+    fun triggerVoiceRecoveryCheck() {
+        _voiceRecoverySnapshot.value = when (_connectionState.value) {
+            ConnectionState.Connected -> {
+                when (_gptAccountStatus.value) {
+                    BridgeManagedAccountStatus.AUTHENTICATED -> {
+                        if (supportsBridgeVoiceAuth) {
+                            RecoveryAccessorySnapshot(
+                                title = "Voice Mode",
+                                summary = "Voice mode is still syncing from your Mac.",
+                                detail = "Keep the bridge connected for a moment, then try again.",
+                                status = RecoveryAccessoryStatus.SYNCING
+                            )
+                        } else {
+                            RecoveryAccessorySnapshot(
+                                title = "Voice Mode",
+                                summary = "This bridge session does not support voice mode yet.",
+                                detail = "Restart Remodex on your Mac, then reconnect Android and try again.",
+                                status = RecoveryAccessoryStatus.ACTION_REQUIRED,
+                                actionLabel = "Reconnect"
+                            )
+                        }
+                    }
+                    BridgeManagedAccountStatus.LOGIN_IN_PROGRESS -> RecoveryAccessorySnapshot(
+                        title = "Voice Mode",
+                        summary = "Voice mode is still syncing from your Mac.",
+                        detail = "Wait for ChatGPT login to finish on the paired Mac, then retry.",
+                        status = RecoveryAccessoryStatus.SYNCING
+                    )
+                    BridgeManagedAccountStatus.REAUTH_REQUIRED -> RecoveryAccessorySnapshot(
+                        title = "Voice Mode",
+                        summary = "ChatGPT voice needs a fresh sign-in on your Mac.",
+                        detail = "Open ChatGPT on the paired Mac, sign in again there, then retry here.",
+                        status = RecoveryAccessoryStatus.ACTION_REQUIRED,
+                        actionLabel = "How To Fix"
+                    )
+                    BridgeManagedAccountStatus.NOT_LOGGED_IN, BridgeManagedAccountStatus.UNKNOWN -> RecoveryAccessorySnapshot(
+                        title = "Voice Mode",
+                        summary = "Sign in to ChatGPT on your Mac to use voice mode.",
+                        detail = "Open ChatGPT on the paired Mac, sign in there, then come back here and try again.",
+                        status = RecoveryAccessoryStatus.ACTION_REQUIRED,
+                        actionLabel = "How To Fix"
+                    )
+                }
+            }
+            ConnectionState.Connecting -> RecoveryAccessorySnapshot(
+                title = "Voice Mode",
+                summary = "Reconnect to your Mac to use voice mode.",
+                detail = "Keep the Remodex bridge running on your Mac, then try again.",
+                status = RecoveryAccessoryStatus.RECONNECTING
+            )
+            else -> RecoveryAccessorySnapshot(
+                title = "Voice Mode",
+                summary = "Reconnect to your Mac to use voice mode.",
+                detail = "Keep the Remodex bridge running on your Mac, then try again.",
+                status = RecoveryAccessoryStatus.INTERRUPTED,
+                actionLabel = "Reconnect"
+            )
+        }
+    }
+
+    fun dismissVoiceRecovery() {
+        _voiceRecoverySnapshot.value = null
     }
 
     suspend fun switchModel(model: String) {
@@ -2478,14 +2658,80 @@ class CodexService(
     }
 
     private fun normalizeProjectPath(candidatePath: String?): String? {
-        val trimmed = candidatePath?.trim().orEmpty()
-        if (trimmed.isEmpty()) {
-            return null
+        return normalizeFilesystemProjectPath(candidatePath)
+    }
+
+    private suspend fun fetchBridgeManagedStatusSnapshot(): JsonObject {
+        val responsePair = requestFirstAvailable(
+            methods = listOf("account/status/read", "getAuthStatus")
+        ) ?: throw IllegalStateException("Bridge-managed account status unavailable from relay.")
+        return responsePair.second.result as? JsonObject
+            ?: throw IllegalStateException("Bridge-managed account status response missing payload.")
+    }
+
+    private fun applyBridgeManagedAccountSnapshot(payload: JsonObject) {
+        val status = payload.string("status", "authStatus", "accountStatus")?.trim()?.lowercase()
+        val loginInFlight = payload.bool("loginInFlight", "login_in_flight") == true
+        val needsReauth = payload.bool("needsReauth", "needs_reauth") == true
+        val isAuthenticated = status == "authenticated" || payload.bool("authenticated", "isAuthenticated") == true
+        _gptAccountStatus.value = when {
+            needsReauth -> BridgeManagedAccountStatus.REAUTH_REQUIRED
+            loginInFlight -> BridgeManagedAccountStatus.LOGIN_IN_PROGRESS
+            isAuthenticated -> BridgeManagedAccountStatus.AUTHENTICATED
+            status == "not_logged_in" || status == "logged_out" || status == "unauthenticated" -> BridgeManagedAccountStatus.NOT_LOGGED_IN
+            else -> BridgeManagedAccountStatus.UNKNOWN
         }
-        if (trimmed == "Project path not resolved.") {
-            return null
+        _gptAccountEmail.value = payload.string("email", "accountEmail", "userEmail")
+        val tokenReady = payload.bool("tokenReady", "token_ready") ?: false
+        if (_gptAccountStatus.value == BridgeManagedAccountStatus.AUTHENTICATED && !tokenReady) {
+            _voiceRecoverySnapshot.value = RecoveryAccessorySnapshot(
+                title = "Voice Mode",
+                summary = "Voice mode is still syncing from your Mac.",
+                detail = "Keep the bridge connected for a moment, then try again.",
+                status = RecoveryAccessoryStatus.SYNCING
+            )
+        } else if (_gptAccountStatus.value == BridgeManagedAccountStatus.AUTHENTICATED) {
+            _voiceRecoverySnapshot.value = null
         }
-        return trimmed
+    }
+
+    private fun applyBridgePackageStatus(
+        payload: JsonObject,
+        allowAvailableBridgeUpdatePrompt: Boolean
+    ) {
+        _bridgeInstalledVersion.value = payload.string(
+            "bridgeVersion",
+            "bridge_version",
+            "bridgePackageVersion",
+            "bridge_package_version"
+        )
+        _latestBridgePackageVersion.value = payload.string(
+            "bridgeLatestVersion",
+            "bridge_latest_version",
+            "bridgePublishedVersion",
+            "bridge_published_version"
+        )
+        if (allowAvailableBridgeUpdatePrompt) {
+            val latest = _latestBridgePackageVersion.value?.trim()
+            val installed = _bridgeInstalledVersion.value?.trim()
+            if (!latest.isNullOrEmpty()
+                && !installed.isNullOrEmpty()
+                && latest != installed
+                && latest != lastOptionalBridgeUpdateVersion
+            ) {
+                lastOptionalBridgeUpdateVersion = latest
+                setStatus("A newer Remodex update is available on your Mac ($installed -> $latest).", notify = true)
+            }
+        }
+    }
+
+    private fun applyDisconnectedBridgeManagedState() {
+        if (_gptAccountStatus.value == BridgeManagedAccountStatus.UNKNOWN) {
+            return
+        }
+        _gptAccountStatus.value = BridgeManagedAccountStatus.UNKNOWN
+        _gptAccountEmail.value = null
+        _voiceRecoverySnapshot.value = null
     }
 
     private fun resolveSelectedThreadGitScopeOrNull(): GitScope? {
@@ -2532,6 +2778,15 @@ class CodexService(
             "Branch $branch is clean."
         } else {
             "Branch $branch · ahead $ahead · behind $behind · staged $staged · unstaged $unstaged · untracked $untracked"
+        }
+    }
+
+    private suspend fun <T> withGitActionProgress(label: String, block: suspend () -> T): T {
+        _gitActionStatus.value = label
+        return try {
+            block()
+        } finally {
+            _gitActionStatus.value = null
         }
     }
 

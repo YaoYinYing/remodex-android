@@ -96,11 +96,13 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         isAppForeground = true
+        service.setForegroundState(true)
     }
 
     override fun onStop() {
         super.onStop()
         isAppForeground = false
+        service.setForegroundState(false)
     }
 
     override fun onDestroy() {

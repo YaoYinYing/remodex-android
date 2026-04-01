@@ -60,6 +60,8 @@ import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.FileAutocompleteMatch
 import com.remodex.mobile.service.PendingPermissionRequest
+import com.remodex.mobile.service.RecoveryAccessorySnapshot
+import com.remodex.mobile.service.RecoveryAccessoryStatus
 import com.remodex.mobile.service.ReviewTarget
 import com.remodex.mobile.service.SkillSuggestion
 import com.remodex.mobile.service.TurnImageAttachment
@@ -98,7 +100,12 @@ fun WorkspaceScreen(
     onSwitchReasoningEffort: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPairing: () -> Unit,
-    onHeaderTap: () -> Unit
+    onHeaderTap: () -> Unit,
+    gitActionStatus: String?,
+    voiceRecoverySnapshot: RecoveryAccessorySnapshot?,
+    onVoiceRecoveryAction: () -> Unit,
+    onDismissVoiceRecovery: () -> Unit,
+    onTriggerVoiceRecovery: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
@@ -437,6 +444,7 @@ fun WorkspaceScreen(
                                 ConversationMetaRow(
                                     projectPath = normalizedProjectPath ?: "No repo bound yet",
                                     gitStatusSummary = gitStatusSummary,
+                                    gitActionStatus = gitActionStatus,
                                     rateLimitInfo = rateLimitInfo,
                                     ciStatus = ciStatus,
                                     branches = gitBranches,
@@ -445,6 +453,16 @@ fun WorkspaceScreen(
                                     onPull = { scope.launch { runCatching { service.gitPull() } } },
                                     onPush = { scope.launch { runCatching { service.gitPush() } } }
                                 )
+                            }
+
+                            if (voiceRecoverySnapshot != null) {
+                                item {
+                                    RecoveryAccessoryCard(
+                                        snapshot = voiceRecoverySnapshot,
+                                        onAction = onVoiceRecoveryAction,
+                                        onDismiss = onDismissVoiceRecovery
+                                    )
+                                }
                             }
 
                             if (timeline.isEmpty()) {
@@ -506,6 +524,8 @@ fun WorkspaceScreen(
                                             .joinToString("\n")
                                     )
                                     voiceDraftText = ""
+                                } else {
+                                    onTriggerVoiceRecovery()
                                 }
                             },
                             onSwitchModel = onSwitchModel,
@@ -938,6 +958,7 @@ private fun EmptyWorkspaceHome(
 private fun ConversationMetaRow(
     projectPath: String,
     gitStatusSummary: String,
+    gitActionStatus: String?,
     rateLimitInfo: String,
     ciStatus: String,
     branches: List<String>,
@@ -967,9 +988,13 @@ private fun ConversationMetaRow(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = gitStatusSummary,
+                text = gitActionStatus ?: gitStatusSummary,
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface
+                color = if (gitActionStatus.isNullOrBlank()) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.primary
+                }
             )
             Text(
                 text = rateLimitInfo,
@@ -1003,6 +1028,61 @@ private fun ConversationMetaRow(
                 }
                 OutlinedButton(onClick = onPush, modifier = Modifier.weight(1f)) {
                     Text("Push")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecoveryAccessoryCard(
+    snapshot: RecoveryAccessorySnapshot,
+    onAction: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val accent = when (snapshot.status) {
+        RecoveryAccessoryStatus.INTERRUPTED -> Color(0xFFE6A23C)
+        RecoveryAccessoryStatus.RECONNECTING -> MaterialTheme.colorScheme.primary
+        RecoveryAccessoryStatus.ACTION_REQUIRED -> Color(0xFFE6A23C)
+        RecoveryAccessoryStatus.SYNCING -> MaterialTheme.colorScheme.primary
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, accent.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                text = snapshot.title,
+                style = MaterialTheme.typography.labelLarge,
+                color = accent
+            )
+            Text(
+                text = snapshot.summary,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            if (!snapshot.detail.isNullOrBlank()) {
+                Text(
+                    text = snapshot.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                if (!snapshot.actionLabel.isNullOrBlank()) {
+                    OutlinedButton(onClick = onAction, modifier = Modifier.weight(1f)) {
+                        Text(snapshot.actionLabel)
+                    }
+                }
+                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                    Text("Close")
                 }
             }
         }

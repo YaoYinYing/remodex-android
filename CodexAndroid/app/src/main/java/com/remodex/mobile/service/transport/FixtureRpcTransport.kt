@@ -185,6 +185,8 @@ class FixtureRpcTransport : RpcTransport {
             "git/pull" -> fixtureGitPull()
             "git/push" -> fixtureGitPush()
             "git/commit" -> fixtureGitCommit(params)
+            "account/status/read" -> fixtureAccountStatus()
+            "getAuthStatus" -> fixtureAccountStatus()
             "fuzzyFileSearch" -> fixtureFuzzyFileSearch(params)
             "fuzzy_file_search" -> fixtureFuzzyFileSearch(params)
             "skills/list" -> fixtureSkillsList(params)
@@ -300,6 +302,25 @@ class FixtureRpcTransport : RpcTransport {
             result = JsonObject(
                 mapOf(
                     "branches" to JsonArray(branchEntries)
+                )
+            )
+        )
+    }
+
+    private fun fixtureAccountStatus(): RpcMessage {
+        return RpcMessage(
+            jsonrpc = "2.0",
+            id = JsonPrimitive("fixture-account-status"),
+            result = JsonObject(
+                mapOf(
+                    "status" to JsonPrimitive("authenticated"),
+                    "authMethod" to JsonPrimitive("chatgpt"),
+                    "email" to JsonPrimitive("fixture@example.com"),
+                    "loginInFlight" to JsonPrimitive(false),
+                    "needsReauth" to JsonPrimitive(false),
+                    "tokenReady" to JsonPrimitive(true),
+                    "bridgeVersion" to JsonPrimitive("1.3.7"),
+                    "bridgeLatestVersion" to JsonPrimitive("1.3.8")
                 )
             )
         )

@@ -16,6 +16,9 @@ data class ThreadSummary(
     val model: String? = null,
     val modelProvider: String? = null
 ) {
+    val normalizedProjectPath: String?
+        get() = normalizeFilesystemProjectPath(cwd)
+
     val displayTitle: String
         get() {
             val trimmedName = name?.trim().orEmpty()
@@ -51,4 +54,7 @@ data class ThreadSummary(
             }
             return null
         }
+
+    val gitWorkingDirectory: String?
+        get() = normalizedProjectPath
 }

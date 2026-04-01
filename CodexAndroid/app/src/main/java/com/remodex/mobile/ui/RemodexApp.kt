@@ -69,6 +69,12 @@ fun RemodexApp(
     val pendingPermissions by service.pendingPermissions.collectAsState()
     val rateLimitInfo by service.rateLimitInfo.collectAsState()
     val ciStatus by service.ciStatus.collectAsState()
+    val gitActionStatus by service.gitActionStatus.collectAsState()
+    val bridgeInstalledVersion by service.bridgeInstalledVersion.collectAsState()
+    val latestBridgePackageVersion by service.latestBridgePackageVersion.collectAsState()
+    val gptAccountStatus by service.gptAccountStatus.collectAsState()
+    val gptAccountEmail by service.gptAccountEmail.collectAsState()
+    val voiceRecoverySnapshot by service.voiceRecoverySnapshot.collectAsState()
     val status by service.status.collectAsState()
     val scope = rememberCoroutineScope()
 
@@ -269,7 +275,16 @@ fun RemodexApp(
                         onSwitchReasoningEffort = { effort -> service.switchReasoningEffort(effort) },
                         onOpenSettings = { showSettingsRoute = true },
                         onOpenPairing = { forcePairingView = true },
-                        onHeaderTap = onHeaderTap
+                        onHeaderTap = onHeaderTap,
+                        gitActionStatus = gitActionStatus,
+                        voiceRecoverySnapshot = voiceRecoverySnapshot,
+                        onVoiceRecoveryAction = {
+                            if (voiceRecoverySnapshot?.actionLabel == "Reconnect") {
+                                scope.launch { runCatching { service.connectLive() } }
+                            }
+                        },
+                        onDismissVoiceRecovery = { service.dismissVoiceRecovery() },
+                        onTriggerVoiceRecovery = { service.triggerVoiceRecoveryCheck() }
                     )
                 }
                 AppGate.SETTINGS -> {
@@ -292,6 +307,10 @@ fun RemodexApp(
                         notificationsEnabled = notificationsEnabled,
                         rateLimitInfo = rateLimitInfo,
                         ciStatus = ciStatus,
+                        bridgeInstalledVersion = bridgeInstalledVersion,
+                        latestBridgePackageVersion = latestBridgePackageVersion,
+                        gptAccountStatus = gptAccountStatus,
+                        gptAccountEmail = gptAccountEmail,
                         fontStyle = fontStyle,
                         toneMode = toneMode,
                         loggerLevel = loggerLevel,
@@ -311,6 +330,9 @@ fun RemodexApp(
                         onDisconnect = {
                             scope.launch { runCatching { service.disconnect() } }
                             showSettingsRoute = false
+                        },
+                        onRefreshBridgeManagedState = {
+                            scope.launch { runCatching { service.refreshBridgeManagedState(allowAvailableBridgeUpdatePrompt = true) } }
                         },
                         onForgetPair = {
                             service.forgetPairing()

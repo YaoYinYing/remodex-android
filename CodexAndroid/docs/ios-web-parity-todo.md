@@ -5,10 +5,10 @@ Source-of-truth:
 - website claims from `https://www.phodex.app/` (live control, git, secure pairing, `@files/$skills//commands`, steering, desktop sync)
 
 Completion rule:
-- This iteration is complete only when all `TODO-01` to `TODO-29` are `DONE`.
+- This iteration is complete only when all `TODO-01` to `TODO-35` are `DONE`.
 
 Gate status:
-- `TODO-01` to `TODO-29`: `DONE` (revalidated on 2026-04-01 after the onboarding/paywall parity refactor and Android-first copy cleanup)
+- `TODO-01` to `TODO-35`: `DONE` (revalidated on 2026-04-01 after upstream main parity sync for path/account/voice/git progress updates)
 
 | TODO | Scope | iOS / Website basis | Verification | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -41,6 +41,12 @@ Gate status:
 | TODO-27 | Sidebar density parity | `SidebarThreadListView.swift` + `SidebarThreadRowView.swift` | Instrumentation + screenshot | denser thread rows and lighter drawer chrome match iOS scanning rhythm better | DONE |
 | TODO-28 | Onboarding hero fidelity | `OnboardingWelcomePage.swift`, `OnboardingFeaturesPage.swift`, `OnboardingStepPage.swift` | Instrumentation + screenshot | hero splash, centered feature page, and centered step cards now match iOS structure | DONE |
 | TODO-29 | Paywall feature-strip fidelity | `SubscriptionGateView.swift` | Instrumentation + screenshot | centered hero plus horizontal feature cards mirror the iOS paywall shell | DONE |
+| TODO-30 | Filesystem cwd normalization parity | `CodexThread.swift`, `CodexService+ThreadsTurns.swift` | Unit | pseudo cwd buckets are rejected while `~/` and Windows drive roots stay valid | DONE |
+| TODO-31 | Bridge-managed account parity | `CodexService+Account.swift` | Unit + settings UI | ChatGPT/account state and bridge package versions mirror from the paired Mac | DONE |
+| TODO-32 | Voice recovery guidance parity | `ConnectionRecoveryCard.swift`, `GPTVoiceSetupSheet.swift`, `TurnView.swift` | Instrumentation + runtime UI | reconnect/sign-in/sync-needed voice states render guided recovery instead of generic failure text | DONE |
+| TODO-33 | Codex install step reminder parity | `OnboardingView.swift` | Instrumentation | onboarding warns before leaving the Codex CLI install step | DONE |
+| TODO-34 | Git progress parity | upstream git action progress states | Unit + workspace UI | pull/push/commit/checkout actions show temporary in-progress state in workspace meta | DONE |
+| TODO-35 | Foreground bridge version refresh parity | `SettingsView.swift`, `CodexService+Account.swift` | Foreground/settings refresh | bridge version state refreshes independently on foreground return and settings refresh | DONE |
 
 ## Evidence Pack
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`

@@ -260,6 +260,54 @@ val WebsiteFeatureTodos = listOf(
         iosReference = "SubscriptionGateView feature list + hero card",
         websiteClaim = "The paywall shell should present the same product feature stack as iOS.",
         defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-30",
+        title = "Filesystem cwd normalization parity",
+        detail = "Only real filesystem paths should bind thread starts and git scope; pseudo buckets like server or _default must be ignored.",
+        iosReference = "CodexThread.swift + CodexThreadStartProjectBinding",
+        websiteClaim = "Project-bound flows should only target real local repositories.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-31",
+        title = "Bridge-managed account parity",
+        detail = "Refresh bridge package/account metadata together and surface current ChatGPT status from the paired Mac.",
+        iosReference = "CodexService+Account.swift",
+        websiteClaim = "Desktop-managed auth state should be visible on mobile for recovery guidance.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-32",
+        title = "Voice recovery guidance parity",
+        detail = "Show voice-specific recovery guidance for reconnect, sign-in, and sync-required states above the composer.",
+        iosReference = "ConnectionRecoveryCard.swift + GPTVoiceSetupSheet.swift + TurnView voice recovery",
+        websiteClaim = "Voice mode should fail with guided recovery instead of generic errors.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-33",
+        title = "Codex install step reminder parity",
+        detail = "Warn before leaving the Codex CLI install step so users do not continue onboarding without the required CLI.",
+        iosReference = "OnboardingView.swift install reminder alert",
+        websiteClaim = "Onboarding should block obvious setup mistakes.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-34",
+        title = "Git progress parity",
+        detail = "Show inline commit, push, pull, and checkout progress while git actions are running.",
+        iosReference = "Git action progress state updates",
+        websiteClaim = "Git actions should show in-progress state instead of looking idle.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-35",
+        title = "Foreground bridge version refresh parity",
+        detail = "Refresh bridge version state independently on foreground return and in settings without depending on GPT account refresh.",
+        iosReference = "SettingsView.swift + CodexService+Account.swift bridge version refresh",
+        websiteClaim = "Bridge update availability should surface as soon as the app returns to foreground.",
+        defaultState = TodoState.DONE
     )
 )
 
@@ -408,6 +456,36 @@ val ParityAcceptanceMatrix = listOf(
         todoId = "TODO-29",
         verification = "Instrumentation + screenshot",
         evidence = "Paywall uses a centered hero plus horizontal feature cards instead of the flatter Android-only stack."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-30",
+        verification = "Unit",
+        evidence = "Pseudo cwd buckets are rejected while ~/ and Windows roots remain valid."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-31",
+        verification = "Unit + settings UI",
+        evidence = "Bridge-managed ChatGPT/account state and package versions are exposed from the paired Mac."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-32",
+        verification = "Instrumentation + runtime UI",
+        evidence = "Voice guidance renders recovery cards for reconnect, sign-in, and syncing states."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-33",
+        verification = "Instrumentation",
+        evidence = "Leaving the Codex CLI install step prompts the user before advancing."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-34",
+        verification = "Unit + workspace UI",
+        evidence = "Git pull/push/commit/checkout show temporary in-progress summaries in the conversation meta area."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-35",
+        verification = "Foreground/settings refresh",
+        evidence = "Bridge version refresh runs separately from GPT account refresh on app foreground and settings refresh."
     )
 )
 
