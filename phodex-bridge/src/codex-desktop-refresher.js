@@ -105,14 +105,17 @@ class CodexDesktopRefresher {
 
     if (method === "turn/start") {
       const target = resolveInboundTarget(method, parsed);
-      if (!target) {
+      if (target?.threadId) {
+        this.queueRefresh("phone", target, `phone ${method}`);
+        this.ensureWatcher(target.threadId);
         return;
       }
 
-      this.queueRefresh("phone", target, `phone ${method}`);
-      if (target.threadId) {
-        this.ensureWatcher(target.threadId);
-      }
+      this.pendingNewThread = true;
+      this.mode = "pending_new_thread";
+      this.clearPendingTarget();
+      this.scheduleNewThreadFallback();
+      return;
     }
   }
 
@@ -136,15 +139,19 @@ class CodexDesktopRefresher {
       return;
     }
 
-    if (method === "thread/started") {
+    if (method === "thread/started" || method === "turn/started") {
       const target = resolveOutboundTarget(method, parsed);
+      if (!target) {
+        return;
+      }
       this.pendingNewThread = false;
       this.clearFallbackTimer();
       this.queueRefresh("phone", target, `codex ${method}`);
-      if (target?.threadId) {
+      if (target.threadId) {
         this.mode = "watching_thread";
         this.ensureWatcher(target.threadId);
       }
+      return;
     }
   }
 
@@ -578,6 +585,38 @@ function readBridgeConfig({
       readFirstDefinedEnv(["REMODEX_REFRESH_DEBOUNCE_MS"], String(DEFAULT_DEBOUNCE_MS), env),
       DEFAULT_DEBOUNCE_MS
     ),
+    refreshFallbackNewThreadMs: parseIntegerEnv(
+      readFirstDefinedEnv(
+        ["REMODEX_REFRESH_FALLBACK_NEW_THREAD_MS"],
+        String(DEFAULT_FALLBACK_NEW_THREAD_MS),
+        env
+      ),
+      DEFAULT_FALLBACK_NEW_THREAD_MS
+    ),
+    refreshMidRunThrottleMs: parseIntegerEnv(
+      readFirstDefinedEnv(
+        ["REMODEX_REFRESH_MIDRUN_THROTTLE_MS"],
+        String(DEFAULT_MID_RUN_REFRESH_THROTTLE_MS),
+        env
+      ),
+      DEFAULT_MID_RUN_REFRESH_THROTTLE_MS
+    ),
+    refreshRolloutLookupTimeoutMs: parseIntegerEnv(
+      readFirstDefinedEnv(
+        ["REMODEX_REFRESH_ROLLOUT_LOOKUP_TIMEOUT_MS"],
+        String(DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS),
+        env
+      ),
+      DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS
+    ),
+    refreshRolloutIdleTimeoutMs: parseIntegerEnv(
+      readFirstDefinedEnv(
+        ["REMODEX_REFRESH_ROLLOUT_IDLE_TIMEOUT_MS"],
+        String(DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS),
+        env
+      ),
+      DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS
+    ),
     codexEndpoint,
     refreshCommand,
     codexBundleId: readFirstDefinedEnv(["REMODEX_CODEX_BUNDLE_ID"], DEFAULT_BUNDLE_ID, env),
@@ -688,7 +727,7 @@ function resolveInboundTarget(method, message) {
     return { threadId, url: buildThreadDeepLink(threadId) };
   }
 
-  if (method === "thread/start" || method === "turn/start") {
+  if (method === "thread/start") {
     return { threadId: null, url: NEW_THREAD_DEEP_LINK };
   }
 

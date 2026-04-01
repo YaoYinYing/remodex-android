@@ -77,6 +77,10 @@ function startBridge({
   const desktopRefresher = new CodexDesktopRefresher({
     enabled: config.refreshEnabled,
     debounceMs: config.refreshDebounceMs,
+    fallbackNewThreadMs: config.refreshFallbackNewThreadMs,
+    midRunRefreshThrottleMs: config.refreshMidRunThrottleMs,
+    rolloutLookupTimeoutMs: config.refreshRolloutLookupTimeoutMs,
+    rolloutIdleTimeoutMs: config.refreshRolloutIdleTimeoutMs,
     refreshCommand: config.refreshCommand,
     bundleId: config.codexBundleId,
     appPath: config.codexAppPath,
@@ -502,6 +506,7 @@ function startBridge({
     const method = typeof parsed?.method === "string" ? parsed.method.trim() : "";
     if (method !== "account/status/read"
       && method !== "getAuthStatus"
+      && method !== "account/rateLimits/read"
       && method !== "account/login/openOnMac"
       && method !== "voice/resolveAuth") {
       return false;
@@ -530,6 +535,8 @@ function startBridge({
       case "account/status/read":
       case "getAuthStatus":
         return readSanitizedAuthStatus();
+      case "account/rateLimits/read":
+        return readBridgeManagedRateLimits();
       case "account/login/openOnMac":
         return openPendingAuthLoginOnMac(params);
       case "voice/resolveAuth":
@@ -566,6 +573,28 @@ function startBridge({
         ? bridgeVersionInfoResult.value
         : null,
     });
+  }
+
+  // Mirrors the iOS compat path because some local runtimes reject `null`
+  // params for account/rateLimits/read and require an explicit empty object.
+  async function readBridgeManagedRateLimits() {
+    try {
+      return await sendCodexRequest("account/rateLimits/read", null);
+    } catch (error) {
+      if (!shouldRetryRateLimitsWithEmptyObject(error)) {
+        throw error;
+      }
+    }
+
+    return sendCodexRequest("account/rateLimits/read", {});
+  }
+
+  function shouldRetryRateLimitsWithEmptyObject(error) {
+    const message = typeof error?.message === "string" ? error.message.toLowerCase() : "";
+    return error?.code === -32602
+      || message.includes("invalid type: null")
+      || message.includes("expected map")
+      || message.includes("expected object");
   }
 
   // Opens the ChatGPT sign-in URL in the default browser on the bridge Mac.

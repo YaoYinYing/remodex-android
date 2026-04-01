@@ -103,6 +103,30 @@ test("readBridgeConfig keeps safe defaults and explicit overrides", () => {
   assert.equal(explicitOffConfig.refreshEnabled, false);
 });
 
+test("readBridgeConfig parses refresh timing overrides", () => {
+  const config = readBridgeConfig({
+    env: {
+      REMODEX_REFRESH_DEBOUNCE_MS: "1800",
+      REMODEX_REFRESH_FALLBACK_NEW_THREAD_MS: "2500",
+      REMODEX_REFRESH_MIDRUN_THROTTLE_MS: "12000",
+      REMODEX_REFRESH_ROLLOUT_LOOKUP_TIMEOUT_MS: "6000",
+      REMODEX_REFRESH_ROLLOUT_IDLE_TIMEOUT_MS: "15000",
+    },
+    runtimeRoot: "/workspace/phodex-bridge",
+    fsImpl: {
+      existsSync(targetPath) {
+        return targetPath === "/workspace/.git";
+      },
+    },
+  });
+
+  assert.equal(config.refreshDebounceMs, 1800);
+  assert.equal(config.refreshFallbackNewThreadMs, 2500);
+  assert.equal(config.refreshMidRunThrottleMs, 12000);
+  assert.equal(config.refreshRolloutLookupTimeoutMs, 6000);
+  assert.equal(config.refreshRolloutIdleTimeoutMs, 15000);
+});
+
 test("readBridgeConfig uses only the packaged relay default outside a source checkout", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "remodex-package-"));
   const srcDir = path.join(tempRoot, "src");
@@ -266,6 +290,45 @@ test("thread/started cancels the fallback and refreshes the concrete thread rout
 
   refresher.handleTransportReset();
   assert.equal(stopCount, 1);
+});
+
+test("turn/start without a thread id waits for turn/started before refreshing the concrete thread", async () => {
+  const refreshCalls = [];
+  const watchedThreads = [];
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    fallbackNewThreadMs: 40,
+    refreshExecutor: async (targetUrl) => {
+      refreshCalls.push(targetUrl);
+    },
+    watchThreadRolloutFactory: ({ threadId }) => {
+      watchedThreads.push(threadId);
+      return { stop() {} };
+    },
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {},
+  }));
+  await wait(10);
+  assert.deepEqual(refreshCalls, []);
+
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/started",
+    params: {
+      threadId: "thread-android-1",
+      turnId: "turn-android-1",
+    },
+  }));
+
+  await wait(25);
+
+  assert.deepEqual(refreshCalls, ["codex://threads/thread-android-1"]);
+  assert.deepEqual(watchedThreads, ["thread-android-1"]);
+
+  refresher.handleTransportReset();
 });
 
 test("rollout growth refreshes are throttled during long runs", async () => {

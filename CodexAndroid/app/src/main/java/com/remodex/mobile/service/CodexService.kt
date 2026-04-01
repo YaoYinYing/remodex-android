@@ -149,6 +149,7 @@ class CodexService(
 
     private val _timeline = MutableStateFlow<List<TimelineEntry>>(emptyList())
     val timeline: StateFlow<List<TimelineEntry>> = _timeline
+    private val timelineByThread = mutableMapOf<String, List<TimelineEntry>>()
 
     private val _selectedThreadId = MutableStateFlow<String?>(null)
     val selectedThreadId: StateFlow<String?> = _selectedThreadId
@@ -266,6 +267,7 @@ class CodexService(
         _threads.value = emptyList()
         _selectedThreadId.value = null
         _timeline.value = emptyList()
+        timelineByThread.clear()
         _gitStatusSummary.value = "Git status not loaded."
         _gitBranches.value = emptyList()
         _currentProjectPath.value = "Project path not resolved."
@@ -277,6 +279,7 @@ class CodexService(
         _voiceRecoverySnapshot.value = null
         supportsBridgeVoiceAuth = true
         activeTurnIdByThread.clear()
+        timelineByThread.clear()
         projectPathByThread.clear()
         resumedThreadIds.clear()
         locallyArchivedThreadIds.clear()
@@ -862,20 +865,22 @@ class CodexService(
     }
 
     private fun appendOrMergeTimelineEntry(entry: TimelineEntry, append: Boolean) {
-        if (_selectedThreadId.value != entry.threadId) {
-            return
-        }
-        val existingIndex = _timeline.value.indexOfFirst { item -> item.id == entry.id }
-        if (existingIndex >= 0) {
-            _timeline.value = _timeline.value.toMutableList().also { items ->
+        val existingTimeline = timelineByThread[entry.threadId].orEmpty()
+        val existingIndex = existingTimeline.indexOfFirst { item -> item.id == entry.id }
+        val updatedTimeline = if (existingIndex >= 0) {
+            existingTimeline.toMutableList().also { items ->
                 val existing = items[existingIndex]
                 items[existingIndex] = existing.copy(
                     text = if (append) existing.text + entry.text else entry.text
                 )
             }
-            return
+        } else {
+            existingTimeline + entry
         }
-        _timeline.value = _timeline.value + entry
+        timelineByThread[entry.threadId] = updatedTimeline
+        if (_selectedThreadId.value == entry.threadId) {
+            _timeline.value = updatedTimeline
+        }
     }
 
     private fun upsertThreadSummary(thread: ThreadSummary) {
@@ -1207,6 +1212,7 @@ class CodexService(
         val resultObject = response.result as? JsonObject
             ?: throw IllegalStateException("thread/read result is missing.")
         val parsedTimeline = parser.parseThreadTimeline(resultObject)
+        timelineByThread[normalizedThreadId] = parsedTimeline
         _timeline.value = parsedTimeline
         val activeTurnId = parseActiveTurnId(resultObject)
         if (activeTurnId != null) {
@@ -1294,6 +1300,7 @@ class CodexService(
         locallyArchivedThreadIds.remove(normalizedThreadId)
         projectPathByThread.remove(normalizedThreadId)
         activeTurnIdByThread.remove(normalizedThreadId)
+        timelineByThread.remove(normalizedThreadId)
         _threads.value = _threads.value.filterNot { it.id == normalizedThreadId }
         val selectedId = _selectedThreadId.value
         if (selectedId == normalizedThreadId) {
@@ -2303,7 +2310,7 @@ class CodexService(
     suspend fun refreshRateLimitInfo(silentStatus: Boolean = false) {
         ensureConnected()
         val responsePair = requestFirstAvailable(
-            methods = listOf("rate_limit/status", "ratelimit/status", "limits/read")
+            methods = listOf("account/rateLimits/read", "rate_limit/status", "ratelimit/status", "limits/read")
         )
         if (responsePair == null) {
             _rateLimitInfo.value = "Rate limit info unavailable from relay."
@@ -3086,6 +3093,23 @@ class CodexService(
     }
 
     private fun parseRateLimitInfo(result: JsonObject): Pair<String, Int?> {
+        val summaryRows = parseRateLimitSummaryRows(result)
+        if (summaryRows.isNotEmpty()) {
+            val sortedRows = summaryRows.sortedWith(
+                compareBy<RateLimitSummaryRow>({ it.windowDurationMins ?: Int.MAX_VALUE }, { it.label.lowercase() })
+            )
+            val summary = sortedRows.take(2).joinToString(" · ") { row ->
+                buildString {
+                    append(row.label)
+                    append(' ')
+                    append(row.remainingPercent)
+                    append("% left")
+                    row.resetsAtEpochSeconds?.let { append(" @").append(it) }
+                }
+            }
+            return "Rate limit: $summary" to sortedRows.minOfOrNull { it.remainingPercent }
+        }
+
         val rateObject = (result["rateLimit"] as? JsonObject)
             ?: (result["rate_limit"] as? JsonObject)
             ?: result
@@ -3116,6 +3140,118 @@ class CodexService(
 
         return summary to remaining
     }
+
+    private fun parseRateLimitSummaryRows(result: JsonObject): List<RateLimitSummaryRow> {
+        val payload = (result["result"] as? JsonObject) ?: result
+
+        val keyedBuckets = (payload["rateLimitsByLimitId"] as? JsonObject)
+            ?: (payload["rate_limits_by_limit_id"] as? JsonObject)
+        if (keyedBuckets != null) {
+            return keyedBuckets.entries.flatMap { (limitId, element) ->
+                parseRateLimitBucketRows(limitId, element as? JsonObject)
+            }
+        }
+
+        val nestedBuckets = (payload["rateLimits"] as? JsonObject)
+            ?: (payload["rate_limits"] as? JsonObject)
+        if (nestedBuckets != null) {
+            val directRows = parseDirectRateLimitRows(
+                defaultLabel = payload.string("limitName", "limit_name", "name") ?: "Primary",
+                bucketObject = nestedBuckets
+            )
+            if (directRows.isNotEmpty()) {
+                return directRows
+            }
+            return parseRateLimitBucketRows(null, nestedBuckets)
+        }
+
+        return parseDirectRateLimitRows(
+            defaultLabel = payload.string("limitName", "limit_name", "name") ?: "Primary",
+            bucketObject = payload
+        )
+    }
+
+    private fun parseRateLimitBucketRows(
+        explicitLimitId: String?,
+        bucketObject: JsonObject?
+    ): List<RateLimitSummaryRow> {
+        if (bucketObject == null) {
+            return emptyList()
+        }
+
+        val fallbackLabel = bucketObject.string("limitName", "limit_name", "name")
+            ?: explicitLimitId
+            ?: "Rate limit"
+
+        return buildList {
+            parseRateLimitWindow(
+                label = fallbackLabel,
+                value = bucketObject["primary"] as? JsonObject ?: bucketObject["primary_window"] as? JsonObject
+            )?.let { add(it) }
+            parseRateLimitWindow(
+                label = bucketObject.string("secondaryName", "secondary_name") ?: fallbackLabel,
+                value = bucketObject["secondary"] as? JsonObject ?: bucketObject["secondary_window"] as? JsonObject
+            )?.let { add(it) }
+        }
+    }
+
+    private fun parseDirectRateLimitRows(
+        defaultLabel: String,
+        bucketObject: JsonObject
+    ): List<RateLimitSummaryRow> {
+        val primary = parseRateLimitWindow(
+            label = defaultLabel,
+            value = bucketObject["primary"] as? JsonObject ?: bucketObject["primary_window"] as? JsonObject
+        )
+        val secondary = parseRateLimitWindow(
+            label = bucketObject.string("secondaryName", "secondary_name") ?: "Secondary",
+            value = bucketObject["secondary"] as? JsonObject ?: bucketObject["secondary_window"] as? JsonObject
+        )
+        return listOfNotNull(primary, secondary)
+    }
+
+    private fun parseRateLimitWindow(label: String, value: JsonObject?): RateLimitSummaryRow? {
+        if (value == null) {
+            return null
+        }
+
+        val usedPercent = value.int("usedPercent", "used_percent") ?: return null
+        val windowDurationMins = value.int(
+            "windowDurationMins",
+            "window_duration_mins",
+            "windowMinutes",
+            "window_minutes"
+        )
+        val resetsAtEpochSeconds = value.long("resetsAt", "resets_at", "resetAt", "reset_epoch_seconds")
+            ?.let { if (it > 10_000_000_000L) it / 1_000L else it }
+
+        return RateLimitSummaryRow(
+            label = formatRateLimitLabel(label, windowDurationMins),
+            remainingPercent = (100 - usedPercent).coerceIn(0, 100),
+            windowDurationMins = windowDurationMins,
+            resetsAtEpochSeconds = resetsAtEpochSeconds
+        )
+    }
+
+    private fun formatRateLimitLabel(fallbackLabel: String, windowDurationMins: Int?): String {
+        val minutes = windowDurationMins ?: return fallbackLabel
+        val weekMinutes = 7 * 24 * 60
+        val dayMinutes = 24 * 60
+        return when {
+            minutes > 0 && minutes % weekMinutes == 0 -> if (minutes == weekMinutes) "Weekly" else "${minutes / weekMinutes}w"
+            minutes > 0 && minutes % dayMinutes == 0 -> "${minutes / dayMinutes}d"
+            minutes > 0 && minutes % 60 == 0 -> "${minutes / 60}h"
+            minutes > 0 -> "${minutes}m"
+            else -> fallbackLabel
+        }
+    }
+
+    private data class RateLimitSummaryRow(
+        val label: String,
+        val remainingPercent: Int,
+        val windowDurationMins: Int?,
+        val resetsAtEpochSeconds: Long?
+    )
 
     private fun JsonObject.string(vararg keys: String): String? {
         for (key in keys) {
