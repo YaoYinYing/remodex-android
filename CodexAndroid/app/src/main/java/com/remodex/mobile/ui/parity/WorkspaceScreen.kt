@@ -26,6 +26,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
@@ -141,6 +142,7 @@ fun WorkspaceScreen(
     val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
     var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
+    var showVoiceSetupSheet by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val galleryPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) {
@@ -459,13 +461,19 @@ fun WorkspaceScreen(
                                 item {
                                     RecoveryAccessoryCard(
                                         snapshot = voiceRecoverySnapshot,
-                                        onAction = onVoiceRecoveryAction,
+                                        onAction = {
+                                            if (voiceRecoverySnapshot.actionLabel == "How To Fix") {
+                                                showVoiceSetupSheet = true
+                                            } else {
+                                                onVoiceRecoveryAction()
+                                            }
+                                        },
                                         onDismiss = onDismissVoiceRecovery
                                     )
                                 }
                             }
 
-                            if (timeline.isEmpty()) {
+                            if (timeline.isEmpty() && voiceRecoverySnapshot == null) {
                                 item {
                                     InlineStatusCard(
                                         title = "Conversation",
@@ -827,12 +835,45 @@ fun WorkspaceScreen(
                                 scope.launch { runCatching { service.interruptActiveTurn() } }
                             }
                         )
+
+                        if (showVoiceSetupSheet) {
+                            VoiceSetupHelpDialog(
+                                onDismiss = { showVoiceSetupSheet = false }
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
+}
+
+@Composable
+private fun VoiceSetupHelpDialog(
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Use ChatGPT on Mac") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("1. Open ChatGPT on your Mac.")
+                Text("2. Sign in there with the account you want for voice mode.")
+                Text("3. Keep the bridge connected and come back to Remodex.")
+                Text(
+                    text = "You do not need to start ChatGPT login from Android.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable
@@ -1420,13 +1461,14 @@ private fun ComposerDock(
                             value = composerInput,
                             onValueChange = onComposerInputChange,
                             label = { Text("Ask anything... @files, \$skills, /commands") },
+                            textStyle = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier
                                 .weight(1f)
                                 .onFocusChanged { focusState ->
                                     isInputFocused = focusState.isFocused
                                 },
-                            minLines = 2,
-                            maxLines = 5
+                            minLines = 1,
+                            maxLines = 4
                         )
                     }
                 }

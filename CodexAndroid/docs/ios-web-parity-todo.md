@@ -5,10 +5,10 @@ Source-of-truth:
 - website claims from `https://www.phodex.app/` (live control, git, secure pairing, `@files/$skills//commands`, steering, desktop sync)
 
 Completion rule:
-- This iteration is complete only when all `TODO-01` to `TODO-35` are `DONE`.
+- This iteration is complete only when all `TODO-01` to `TODO-37` are `DONE`.
 
 Gate status:
-- `TODO-01` to `TODO-35`: `DONE` (revalidated on 2026-04-01 after upstream main parity sync for path/account/voice/git progress updates)
+- `TODO-01` to `TODO-37`: `DONE` (revalidated on 2026-04-01 after another turn-flow parity pass for composer sizing and recovery guidance)
 
 | TODO | Scope | iOS / Website basis | Verification | Evidence | Status |
 | --- | --- | --- | --- | --- | --- |
@@ -47,6 +47,8 @@ Gate status:
 | TODO-33 | Codex install step reminder parity | `OnboardingView.swift` | Instrumentation | onboarding warns before leaving the Codex CLI install step | DONE |
 | TODO-34 | Git progress parity | upstream git action progress states | Unit + workspace UI | pull/push/commit/checkout actions show temporary in-progress state in workspace meta | DONE |
 | TODO-35 | Foreground bridge version refresh parity | `SettingsView.swift`, `CodexService+Account.swift` | Foreground/settings refresh | bridge version state refreshes independently on foreground return and settings refresh | DONE |
+| TODO-36 | Composer input sizing parity | `TurnComposerInputTextView.swift` | Instrumentation + screenshot | composer now uses a tighter 1-4 line growth range and body-sized text closer to iOS | DONE |
+| TODO-37 | Recovery empty-state/help parity | `TurnConversationContainerView.swift`, `GPTVoiceSetupSheet.swift` | Instrumentation + runtime UI | recovery accessories replace the generic empty-state card and voice help opens setup guidance | DONE |
 
 ## Evidence Pack
 - `./gradlew -g /tmp/gradle-home :app:testDebugUnitTest :app:assembleDebug`

@@ -308,6 +308,22 @@ val WebsiteFeatureTodos = listOf(
         iosReference = "SettingsView.swift + CodexService+Account.swift bridge version refresh",
         websiteClaim = "Bridge update availability should surface as soon as the app returns to foreground.",
         defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-36",
+        title = "Composer input sizing parity",
+        detail = "Keep the composer closer to the iOS input behavior with a smaller growth ceiling and body-sized text.",
+        iosReference = "TurnComposerInputTextView.swift",
+        websiteClaim = "The composer should feel compact and controlled instead of overgrowing the turn screen.",
+        defaultState = TodoState.DONE
+    ),
+    WebsiteTodo(
+        id = "TODO-37",
+        title = "Recovery empty-state/help parity",
+        detail = "When recovery accessories are present, avoid noisy generic empty-state cards and provide a voice setup help surface for sign-in guidance.",
+        iosReference = "TurnConversationContainerView.swift + GPTVoiceSetupSheet.swift",
+        websiteClaim = "Recovery should guide the user instead of stacking generic status chrome.",
+        defaultState = TodoState.DONE
     )
 )
 
@@ -486,6 +502,16 @@ val ParityAcceptanceMatrix = listOf(
         todoId = "TODO-35",
         verification = "Foreground/settings refresh",
         evidence = "Bridge version refresh runs separately from GPT account refresh on app foreground and settings refresh."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-36",
+        verification = "Instrumentation + screenshot",
+        evidence = "Composer input uses a tighter 1-4 line growth range and body-sized text closer to the iOS feel."
+    ),
+    ParityAcceptanceItem(
+        todoId = "TODO-37",
+        verification = "Instrumentation + runtime UI",
+        evidence = "Recovery cards suppress the generic empty conversation card and the voice help action opens setup guidance."
     )
 )
 
