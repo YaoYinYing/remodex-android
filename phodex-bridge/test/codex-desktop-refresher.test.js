@@ -111,6 +111,8 @@ test("readBridgeConfig parses refresh timing overrides", () => {
       REMODEX_REFRESH_MIDRUN_THROTTLE_MS: "12000",
       REMODEX_REFRESH_ROLLOUT_LOOKUP_TIMEOUT_MS: "6000",
       REMODEX_REFRESH_ROLLOUT_IDLE_TIMEOUT_MS: "15000",
+      REMODEX_REFRESH_TRACE_FILE: "/tmp/remodex-refresh-trace.ndjson",
+      REMODEX_REFRESH_DANCE_WINDOW_MS: "4500",
       REMODEX_PAIRING_TTL_MS: "1800000",
     },
     runtimeRoot: "/workspace/phodex-bridge",
@@ -126,6 +128,8 @@ test("readBridgeConfig parses refresh timing overrides", () => {
   assert.equal(config.refreshMidRunThrottleMs, 12000);
   assert.equal(config.refreshRolloutLookupTimeoutMs, 6000);
   assert.equal(config.refreshRolloutIdleTimeoutMs, 15000);
+  assert.equal(config.refreshTraceFile, "/tmp/remodex-refresh-trace.ndjson");
+  assert.equal(config.refreshRouteDanceWindowMs, 4500);
   assert.equal(config.pairingQrTtlMs, 1800000);
 });
 
@@ -295,11 +299,15 @@ test("thread/started refreshes only the concrete thread route", async () => {
 test("turn/start without a thread id waits for turn/started before refreshing the concrete thread", async () => {
   const refreshCalls = [];
   const watchedThreads = [];
+  const traceEvents = [];
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
     refreshExecutor: async (targetUrl) => {
       refreshCalls.push(targetUrl);
+    },
+    onTraceEvent: (event) => {
+      traceEvents.push(event);
     },
     watchThreadRolloutFactory: ({ threadId }) => {
       watchedThreads.push(threadId);
@@ -326,8 +334,59 @@ test("turn/start without a thread id waits for turn/started before refreshing th
 
   assert.deepEqual(refreshCalls, ["codex://threads/thread-android-1"]);
   assert.deepEqual(watchedThreads, ["thread-android-1"]);
+  assert.equal(traceEvents.some((event) => event.type === "route_dance_detected"), false);
+  assert.deepEqual(
+    traceEvents.filter((event) => event.type === "refresh_executed").map((event) => event.targetUrl),
+    ["codex://threads/thread-android-1"]
+  );
 
   refresher.handleTransportReset();
+});
+
+test("multiple refresh executions for one mobile send emit a route_dance_detected trace", async () => {
+  const traceEvents = [];
+  let currentTime = 1_000;
+
+  const refresher = new CodexDesktopRefresher({
+    enabled: true,
+    debounceMs: 0,
+    routeDanceWindowMs: 4_000,
+    now: () => currentTime,
+    refreshExecutor: async () => {},
+    onTraceEvent: (event) => {
+      traceEvents.push(event);
+    },
+    watchThreadRolloutFactory: () => ({ stop() {} }),
+  });
+
+  refresher.handleInbound(JSON.stringify({
+    method: "turn/start",
+    params: {},
+  }));
+  await wait(5);
+
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/started",
+    params: {
+      threadId: "thread-dance",
+      turnId: "turn-dance",
+    },
+  }));
+  await wait(10);
+
+  currentTime = 2_000;
+  refresher.handleOutbound(JSON.stringify({
+    method: "turn/completed",
+    params: {
+      threadId: "thread-dance",
+      turnId: "turn-dance",
+    },
+  }));
+  await wait(10);
+
+  const danceEvents = traceEvents.filter((event) => event.type === "route_dance_detected");
+  assert.equal(danceEvents.length, 1);
+  assert.equal(danceEvents[0].targetThreadId, "thread-dance");
 });
 
 test("rollout growth no longer triggers mid-run refreshes", async () => {

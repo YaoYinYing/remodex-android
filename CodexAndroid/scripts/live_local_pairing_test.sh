@@ -22,6 +22,8 @@ RELAY_PORT="${RELAY_PORT:-9000}"
 WAIT_SECONDS="${WAIT_SECONDS:-45}"
 SKIP_BUILD="false"
 RUN_LOG_PATH="${RUN_LOG_PATH:-/tmp/remodex-run-local-live.log}"
+REFRESH_TRACE_PATH="${REFRESH_TRACE_PATH:-/tmp/remodex-refresh-trace.ndjson}"
+MONITOR_REFRESH_SECONDS="${MONITOR_REFRESH_SECONDS:-0}"
 RUN_PID=""
 
 usage() {
@@ -36,6 +38,9 @@ Options:
   --wait-seconds <n>           max wait for connected status (default: 45)
   --skip-build                 skip APK build/install
   --run-log <path>             path for run-local-remodex combined logs
+  --refresh-trace <path>       desktop refresh trace path (default: /tmp/remodex-refresh-trace.ndjson)
+  --monitor-refresh-seconds <n>
+                               after connect, watch trace for route_dance_detected (default: 0)
   --help                       show this help text
 EOF
 }
@@ -68,6 +73,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --run-log)
       RUN_LOG_PATH="$2"
+      shift 2
+      ;;
+    --refresh-trace)
+      REFRESH_TRACE_PATH="$2"
+      shift 2
+      ;;
+    --monitor-refresh-seconds)
+      MONITOR_REFRESH_SECONDS="$2"
       shift 2
       ;;
     --help)
@@ -123,8 +136,11 @@ if ! "${ADB_ARGS[@]}" shell pm path "${APP_PACKAGE}" 2>/dev/null | grep -q '^pac
 fi
 
 echo "[live-test] starting run-local-remodex on hostname=${RELAY_HOSTNAME} port=${RELAY_PORT}"
+mkdir -p "$(dirname "${REFRESH_TRACE_PATH}")"
+: > "${REFRESH_TRACE_PATH}"
 (
   cd "${ROOT_DIR}"
+  REMODEX_REFRESH_TRACE_FILE="${REFRESH_TRACE_PATH}" \
   bash ./run-local-remodex.sh --hostname "${RELAY_HOSTNAME}" --port "${RELAY_PORT}"
 ) >"${RUN_LOG_PATH}" 2>&1 &
 RUN_PID=$!
@@ -235,6 +251,20 @@ done
 
 if [[ "${success}" == "true" ]]; then
   echo "[live-test] PASS: Android connected via local live secure relay."
+  if (( MONITOR_REFRESH_SECONDS > 0 )); then
+    echo "[live-test] monitor active: waiting ${MONITOR_REFRESH_SECONDS}s for route_dance_detected in ${REFRESH_TRACE_PATH}"
+    monitor_deadline=$((SECONDS + MONITOR_REFRESH_SECONDS))
+    while (( SECONDS < monitor_deadline )); do
+      if [[ -f "${REFRESH_TRACE_PATH}" ]] && grep -q '"type":"route_dance_detected"' "${REFRESH_TRACE_PATH}"; then
+        echo "[live-test] FAIL: detected desktop route dancing." >&2
+        echo "[live-test] --- refresh trace tail ---" >&2
+        tail -n 40 "${REFRESH_TRACE_PATH}" >&2 || true
+        exit 1
+      fi
+      sleep 1
+    done
+    echo "[live-test] PASS: no desktop route dancing observed."
+  fi
   exit 0
 fi
 

@@ -17,6 +17,7 @@ const DEFAULT_MID_RUN_REFRESH_THROTTLE_MS = 3_000;
 const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
+const DEFAULT_ROUTE_DANCE_WINDOW_MS = 4_000;
 const REFRESH_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-refresh.applescript");
 
 class CodexDesktopRefresher {
@@ -36,6 +37,9 @@ class CodexDesktopRefresher {
     watchThreadRolloutFactory = createThreadRolloutActivityWatcher,
     refreshBackend = null,
     customRefreshFailureThreshold = DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD,
+    traceFilePath = "",
+    onTraceEvent = null,
+    routeDanceWindowMs = DEFAULT_ROUTE_DANCE_WINDOW_MS,
   } = {}) {
     this.enabled = enabled;
     this.debounceMs = debounceMs;
@@ -53,6 +57,9 @@ class CodexDesktopRefresher {
     this.refreshBackend = refreshBackend
       || (this.refreshCommand ? "command" : (this.refreshExecutor ? "command" : "applescript"));
     this.customRefreshFailureThreshold = customRefreshFailureThreshold;
+    this.traceFilePath = typeof traceFilePath === "string" ? traceFilePath.trim() : "";
+    this.onTraceEvent = typeof onTraceEvent === "function" ? onTraceEvent : null;
+    this.routeDanceWindowMs = routeDanceWindowMs;
 
     this.mode = "idle";
     this.pendingNewThread = false;
@@ -77,6 +84,9 @@ class CodexDesktopRefresher {
     this.runtimeRefreshAvailable = enabled;
     this.consecutiveRefreshFailures = 0;
     this.unavailableLogged = false;
+    this.traceSequence = 0;
+    this.sendCorrelationCounter = 0;
+    this.activeSendCorrelation = null;
   }
 
   handleInbound(rawMessage) {
@@ -88,6 +98,7 @@ class CodexDesktopRefresher {
     const method = parsed.method;
     if (method === "thread/start") {
       const target = resolveInboundTarget(method, parsed);
+      this.beginSendCorrelation(method, target);
       if (target?.threadId) {
         this.queueRefresh("phone", target, `phone ${method}`);
         this.ensureWatcher(target.threadId);
@@ -102,6 +113,7 @@ class CodexDesktopRefresher {
 
     if (method === "turn/start") {
       const target = resolveInboundTarget(method, parsed);
+      this.beginSendCorrelation(method, target);
       if (target?.threadId) {
         this.queueRefresh("phone", target, `phone ${method}`);
         this.ensureWatcher(target.threadId);
@@ -140,6 +152,7 @@ class CodexDesktopRefresher {
         return;
       }
       this.pendingNewThread = false;
+      this.materializeSendCorrelation(target, method);
       this.queueRefresh("phone", target, `codex ${method}`);
       if (target.threadId) {
         this.mode = "watching_thread";
@@ -156,12 +169,20 @@ class CodexDesktopRefresher {
     this.lastRefreshAt = 0;
     this.lastRefreshSignature = "";
     this.mode = "idle";
+    this.finalizeSendCorrelation("transport_reset");
     this.stopWatcher();
   }
 
   queueRefresh(kind, target, reason) {
     this.noteRefreshTarget(target);
     this.pendingRefreshKinds.add(kind);
+    this.trace("refresh_queued", {
+      kind,
+      reason,
+      targetUrl: target?.url || "",
+      targetThreadId: target?.threadId || "",
+      correlationId: this.activeSendCorrelation?.id || "",
+    });
     this.scheduleRefresh(reason);
   }
 
@@ -170,6 +191,13 @@ class CodexDesktopRefresher {
     this.pendingCompletionRefresh = true;
     this.pendingCompletionTurnId = turnId;
     this.stopWatcherAfterRefreshThreadId = target?.threadId || null;
+    this.trace("completion_refresh_queued", {
+      reason,
+      turnId: turnId || "",
+      targetUrl: target?.url || "",
+      targetThreadId: target?.threadId || "",
+      correlationId: this.activeSendCorrelation?.id || "",
+    });
     this.scheduleRefresh(reason);
   }
 
@@ -214,6 +242,11 @@ class CodexDesktopRefresher {
     const elapsedSinceLastRefresh = this.now() - this.lastRefreshAt;
     const waitMs = Math.max(0, this.debounceMs - elapsedSinceLastRefresh);
     this.log(`refresh scheduled: ${reason}`);
+    this.trace("refresh_scheduled", {
+      reason,
+      waitMs,
+      correlationId: this.activeSendCorrelation?.id || "",
+    });
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null;
       void this.runPendingRefresh();
@@ -272,12 +305,25 @@ class CodexDesktopRefresher {
         && this.now() - this.lastRefreshAt < this.debounceMs
       ) {
         this.log(`refresh skipped (duplicate target): ${refreshSignature}`);
+        this.trace("refresh_skipped_duplicate", {
+          refreshSignature,
+          targetUrl: targetUrl || "",
+          targetThreadId: targetThreadId || "",
+          correlationId: this.activeSendCorrelation?.id || "",
+        });
       } else {
         await this.executeRefresh(targetUrl);
         this.lastRefreshAt = this.now();
         this.lastRefreshSignature = refreshSignature;
         this.consecutiveRefreshFailures = 0;
         didRefresh = true;
+        this.recordExecutedRefresh({
+          targetUrl: targetUrl || "",
+          targetThreadId: targetThreadId || "",
+          pendingRefreshKinds: Array.from(pendingRefreshKinds),
+          completionTurnId: completionTurnId || "",
+          refreshSignature,
+        });
       }
       if (completionTurnId && didRefresh) {
         this.lastTurnIdRefreshed = completionTurnId;
@@ -327,6 +373,132 @@ class CodexDesktopRefresher {
     this.clearPendingCompletionTarget();
     this.clearPendingTarget();
     this.stopWatcherAfterRefreshThreadId = null;
+  }
+
+  beginSendCorrelation(method, target) {
+    const correlation = {
+      id: `send-${this.now()}-${++this.sendCorrelationCounter}`,
+      method,
+      startedAt: this.now(),
+      expectedThreadId: target?.threadId || "",
+      expectedUrl: target?.url || "",
+      firstRefreshAt: 0,
+      refreshCount: 0,
+      executedTargets: [],
+    };
+    this.activeSendCorrelation = correlation;
+    this.trace("mobile_send_started", {
+      correlationId: correlation.id,
+      method,
+      expectedThreadId: correlation.expectedThreadId,
+      expectedUrl: correlation.expectedUrl,
+    });
+  }
+
+  materializeSendCorrelation(target, sourceMethod) {
+    if (!this.activeSendCorrelation) {
+      return;
+    }
+
+    if (!this.activeSendCorrelation.expectedThreadId && target?.threadId) {
+      this.activeSendCorrelation.expectedThreadId = target.threadId;
+    }
+    if (!this.activeSendCorrelation.expectedUrl && target?.url) {
+      this.activeSendCorrelation.expectedUrl = target.url;
+    }
+    this.trace("mobile_send_materialized", {
+      correlationId: this.activeSendCorrelation.id,
+      sourceMethod,
+      expectedThreadId: this.activeSendCorrelation.expectedThreadId,
+      expectedUrl: this.activeSendCorrelation.expectedUrl,
+    });
+  }
+
+  recordExecutedRefresh({
+    targetUrl,
+    targetThreadId,
+    pendingRefreshKinds,
+    completionTurnId,
+    refreshSignature,
+  }) {
+    if (
+      this.activeSendCorrelation
+      && this.activeSendCorrelation.firstRefreshAt
+      && this.now() - this.activeSendCorrelation.firstRefreshAt > this.routeDanceWindowMs
+    ) {
+      this.finalizeSendCorrelation("stable_window_elapsed");
+    }
+
+    const correlation = this.activeSendCorrelation;
+    if (correlation) {
+      const now = this.now();
+      correlation.refreshCount += 1;
+      correlation.executedTargets.push({
+        at: now,
+        targetUrl,
+        targetThreadId,
+        kinds: Array.isArray(pendingRefreshKinds) ? pendingRefreshKinds : [],
+      });
+
+      if (!correlation.firstRefreshAt) {
+        correlation.firstRefreshAt = now;
+      } else if (now - correlation.firstRefreshAt <= this.routeDanceWindowMs) {
+        this.trace("route_dance_detected", {
+          correlationId: correlation.id,
+          method: correlation.method,
+          refreshCount: correlation.refreshCount,
+          targetUrl,
+          targetThreadId,
+          expectedThreadId: correlation.expectedThreadId,
+          expectedUrl: correlation.expectedUrl,
+          executedTargets: correlation.executedTargets,
+        });
+      }
+    }
+
+    this.trace("refresh_executed", {
+      correlationId: correlation?.id || "",
+      targetUrl,
+      targetThreadId,
+      pendingRefreshKinds: Array.isArray(pendingRefreshKinds) ? pendingRefreshKinds : [],
+      completionTurnId,
+      refreshSignature,
+    });
+  }
+
+  finalizeSendCorrelation(reason) {
+    if (!this.activeSendCorrelation) {
+      return;
+    }
+
+    this.trace("mobile_send_finalized", {
+      correlationId: this.activeSendCorrelation.id,
+      reason,
+      refreshCount: this.activeSendCorrelation.refreshCount,
+      expectedThreadId: this.activeSendCorrelation.expectedThreadId,
+      expectedUrl: this.activeSendCorrelation.expectedUrl,
+    });
+    this.activeSendCorrelation = null;
+  }
+
+  trace(type, fields = {}) {
+    const event = {
+      seq: ++this.traceSequence,
+      at: new Date(this.now()).toISOString(),
+      type,
+      ...fields,
+    };
+
+    this.onTraceEvent?.(event);
+    if (!this.traceFilePath) {
+      return;
+    }
+
+    try {
+      fs.appendFileSync(this.traceFilePath, `${JSON.stringify(event)}\n`, "utf8");
+    } catch {
+      // Ignore trace write failures so refresh behavior stays unaffected.
+    }
   }
 
   clearRefreshTimer() {
@@ -426,6 +598,10 @@ class CodexDesktopRefresher {
 
   handleRefreshFailure(error) {
     const message = extractErrorMessage(error);
+    this.trace("refresh_failed", {
+      message,
+      correlationId: this.activeSendCorrelation?.id || "",
+    });
     console.error(`${this.logPrefix} refresh failed: ${message}`);
 
     if (this.refreshBackend === "applescript" && isDesktopUnavailableError(message)) {
@@ -572,6 +748,15 @@ function readBridgeConfig({
     ),
     codexEndpoint,
     refreshCommand,
+    refreshTraceFile: readFirstDefinedEnv(["REMODEX_REFRESH_TRACE_FILE"], "", env),
+    refreshRouteDanceWindowMs: parseIntegerEnv(
+      readFirstDefinedEnv(
+        ["REMODEX_REFRESH_DANCE_WINDOW_MS"],
+        String(DEFAULT_ROUTE_DANCE_WINDOW_MS),
+        env
+      ),
+      DEFAULT_ROUTE_DANCE_WINDOW_MS
+    ),
     codexBundleId: readFirstDefinedEnv(["REMODEX_CODEX_BUNDLE_ID"], DEFAULT_BUNDLE_ID, env),
     codexAppPath: DEFAULT_APP_PATH,
   };

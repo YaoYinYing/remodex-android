@@ -43,6 +43,8 @@ bash ./run-local-remodex.sh --hostname 192.168.31.138 --port 9000
 - Do not reopen `codex://threads/new` for phone-originated `turn/start` without a concrete `threadId`.
 - Refresh desktop when the concrete thread is known, especially on outbound `turn/started`.
 - Keep refresh behavior conservative. Aggressive rollout-growth refresh loops cause desktop bounce/reopen noise.
+- Local bridge runs should emit structured refresh trace events through `REMODEX_REFRESH_TRACE_FILE`. Use that trace as the source of truth for “desktop dancing” instead of judging from screenshots alone.
+- The invariant for a phone-authored send is: at most one concrete thread navigation inside the short route-dance window. If the trace emits `route_dance_detected`, treat it as a real refresher bug.
 
 ## Rate limits and account state
 
@@ -101,6 +103,7 @@ bash ./run-local-remodex.sh --hostname 192.168.31.138 --port 9000
 
 - Some captured PNGs may have malformed chunk tables even though the header is valid. If needed, reopen and resave locally before inspection.
 - The device IME may default to Gboard Chinese pinyin. Do not assume Enter sends; use the explicit send button path when validating composer behavior.
+- `CodexAndroid/scripts/live_local_pairing_test.sh` can monitor the refresh trace after connect. Use `--monitor-refresh-seconds <n>` to keep the living test open and fail automatically if `route_dance_detected` appears while you send from the device.
 
 ## Known anti-patterns
 

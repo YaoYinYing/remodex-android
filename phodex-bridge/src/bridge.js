@@ -82,6 +82,8 @@ function startBridge({
     rolloutLookupTimeoutMs: config.refreshRolloutLookupTimeoutMs,
     rolloutIdleTimeoutMs: config.refreshRolloutIdleTimeoutMs,
     refreshCommand: config.refreshCommand,
+    traceFilePath: config.refreshTraceFile,
+    routeDanceWindowMs: config.refreshRouteDanceWindowMs,
     bundleId: config.codexBundleId,
     appPath: config.codexAppPath,
   });
