@@ -444,7 +444,7 @@ fun WorkspaceScreen(
                         LazyColumn(
                             state = timelineListState,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 276.dp),
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 276.dp),
                             verticalArrangement = Arrangement.spacedBy(20.dp)
                         ) {
                             if (pendingPermissions.isNotEmpty()) {
@@ -955,8 +955,8 @@ private fun WorkspaceTopBar(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -989,7 +989,7 @@ private fun WorkspaceTopBar(
                         } else {
                             middleClip(gitStatusSummary, maxChars = 56)
                         },
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
