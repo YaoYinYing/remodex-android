@@ -65,7 +65,7 @@ fun RemodexTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as? Activity)?.window ?: return@SideEffect
-            window.statusBarColor = Color.Transparent.toArgb()
+            window.statusBarColor = (if (darkTheme) Night else Mist).toArgb()
             window.navigationBarColor = (if (darkTheme) Night else Mist).toArgb()
             val controller = WindowCompat.getInsetsController(window, view)
             controller.isAppearanceLightStatusBars = !darkTheme
