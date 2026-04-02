@@ -444,8 +444,8 @@ fun WorkspaceScreen(
                         LazyColumn(
                             state = timelineListState,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 276.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 276.dp),
+                            verticalArrangement = Arrangement.spacedBy(20.dp)
                         ) {
                             if (pendingPermissions.isNotEmpty()) {
                                 item {
@@ -968,7 +968,8 @@ private fun WorkspaceTopBar(
                     modifier = Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(16.dp))
-                        .clickable(onClick = onTap)
+                        .clickable(onClick = onTap),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(
                         text = selectedThreadTitle ?: "Remodex",
@@ -976,10 +977,18 @@ private fun WorkspaceTopBar(
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                        modifier = if (selectedThreadTitle.isNullOrBlank()) {
+                            Modifier
+                        } else {
+                            Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                        }
                     )
                     Text(
-                        text = middleClip(if (selectedThreadTitle == null) status else gitStatusSummary, maxChars = 48),
+                        text = if (selectedThreadTitle == null) {
+                            status
+                        } else {
+                            middleClip(gitStatusSummary, maxChars = 56)
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,

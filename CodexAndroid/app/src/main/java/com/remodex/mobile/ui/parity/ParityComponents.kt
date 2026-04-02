@@ -1,5 +1,6 @@
 package com.remodex.mobile.ui.parity
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -615,12 +617,14 @@ fun TimelineRow(item: TimelineEntry) {
         || normalizedType.contains("reasoning")
         || normalizedType.contains("tool")
         || normalizedType.contains("plan")
+        || normalizedType.contains("diff")
+        || normalizedType.contains("filechange")
     val textLineCount = remember(item.text) { item.text.count { it == '\n' } + 1 }
     val shouldDefaultCollapse = remember(item.id, item.text, normalizedType) {
         isVerboseType || item.text.length > 280 || textLineCount > 5
     }
     var expanded by rememberSaveable(item.id) { mutableStateOf(!shouldDefaultCollapse) }
-    val collapsedMaxLines = if (isCommandLike) 2 else 4
+    val collapsedMaxLines = if (isCommandLike) 2 else 5
     val firstLinePreview = remember(item.text) {
         item.text.lineSequence()
             .firstOrNull()
@@ -628,47 +632,187 @@ fun TimelineRow(item: TimelineEntry) {
             ?.takeIf { it.isNotEmpty() }
             ?: item.text.trim().take(160)
     }
+    when (item.role) {
+        TimelineRole.USER -> UserTimelineBubble(
+            text = item.text,
+            expanded = expanded,
+            shouldDefaultCollapse = shouldDefaultCollapse,
+            collapsedMaxLines = collapsedMaxLines,
+            onToggleExpanded = { expanded = !expanded }
+        )
+        TimelineRole.ASSISTANT -> AssistantTimelineBlock(
+            text = item.text,
+            expanded = expanded,
+            shouldDefaultCollapse = shouldDefaultCollapse,
+            collapsedMaxLines = collapsedMaxLines,
+            onToggleExpanded = { expanded = !expanded }
+        )
+        TimelineRole.SYSTEM -> SystemTimelineBlock(
+            normalizedType = normalizedType,
+            rawType = item.type,
+            text = item.text,
+            firstLinePreview = firstLinePreview,
+            isCommandLike = isCommandLike,
+            expanded = expanded,
+            shouldDefaultCollapse = shouldDefaultCollapse,
+            collapsedMaxLines = collapsedMaxLines,
+            onToggleExpanded = { expanded = !expanded }
+        )
+    }
+}
+
+@Composable
+private fun UserTimelineBubble(
+    text: String,
+    expanded: Boolean,
+    shouldDefaultCollapse: Boolean,
+    collapsedMaxLines: Int,
+    onToggleExpanded: () -> Unit
+) {
+    Row(modifier = Modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.weight(1f))
+        Column(
+            modifier = Modifier.widthIn(max = 320.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f)
+            ) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = if (expanded || !shouldDefaultCollapse) Int.MAX_VALUE else collapsedMaxLines,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .animateContentSize()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+            }
+            if (shouldDefaultCollapse) {
+                TimelineDisclosureButton(
+                    text = if (expanded) "Show less" else "Show more",
+                    accent = MaterialTheme.colorScheme.onSurfaceVariant,
+                    onClick = onToggleExpanded
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssistantTimelineBlock(
+    text: String,
+    expanded: Boolean,
+    shouldDefaultCollapse: Boolean,
+    collapsedMaxLines: Int,
+    onToggleExpanded: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = if (expanded || !shouldDefaultCollapse) Int.MAX_VALUE else collapsedMaxLines,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (shouldDefaultCollapse) {
+            TimelineDisclosureButton(
+                text = if (expanded) "Show less" else "Show more",
+                accent = CommandAccent,
+                onClick = onToggleExpanded
+            )
+        }
+    }
+}
+
+@Composable
+private fun SystemTimelineBlock(
+    normalizedType: String,
+    rawType: String,
+    text: String,
+    firstLinePreview: String,
+    isCommandLike: Boolean,
+    expanded: Boolean,
+    shouldDefaultCollapse: Boolean,
+    collapsedMaxLines: Int,
+    onToggleExpanded: () -> Unit
+) {
     val accent = when {
-        item.role == TimelineRole.USER -> PlanAccent
-        item.role == TimelineRole.ASSISTANT -> CommandAccent
         normalizedType.contains("plan") -> PlanAccent
         normalizedType.contains("reasoning") -> AlertAmber
         normalizedType.contains("tool") || normalizedType.contains("command") -> CommandAccent
         normalizedType.contains("diff") || normalizedType.contains("filechange") -> MaterialTheme.colorScheme.tertiary
-        else -> MaterialTheme.colorScheme.tertiary
-    }
-    val bubbleColor = when {
-        item.role == TimelineRole.USER -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
-        item.role == TimelineRole.ASSISTANT -> MaterialTheme.colorScheme.surface
-        normalizedType.contains("reasoning") -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
-        else -> MaterialTheme.colorScheme.surfaceVariant
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val label = when {
-        item.role == TimelineRole.USER -> "user"
-        item.role == TimelineRole.ASSISTANT -> "assistant"
-        normalizedType.contains("plan") -> "plan"
-        normalizedType.contains("reasoning") -> "thinking"
-        normalizedType.contains("tool") -> "tool"
-        normalizedType.contains("command") -> "command"
-        normalizedType.contains("filechange") -> "file change"
-        normalizedType.contains("diff") -> "diff"
-        else -> "system"
+        normalizedType.contains("plan") -> "Plan"
+        normalizedType.contains("reasoning") -> "Thinking..."
+        normalizedType.contains("tool") -> "Tool activity"
+        normalizedType.contains("command") -> "Command"
+        normalizedType.contains("filechange") -> "File changes"
+        normalizedType.contains("diff") -> "Diff"
+        else -> rawType.ifBlank { "System" }
+    }
+
+    val isThinking = normalizedType.contains("reasoning")
+    val isToolActivity = normalizedType.contains("tool") && !isCommandLike
+    val showCollapsedCommandPreview = isCommandLike && shouldDefaultCollapse && !expanded && firstLinePreview.isNotBlank()
+
+    if (isThinking || isToolActivity) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .animateContentSize(),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = accent
+            )
+            if (text.isNotBlank()) {
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = if (expanded || !shouldDefaultCollapse) Int.MAX_VALUE else 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (shouldDefaultCollapse) {
+                TimelineDisclosureButton(
+                    text = if (expanded) "Show less" else "Show more",
+                    accent = accent,
+                    onClick = onToggleExpanded
+                )
+            }
+        }
+        return
     }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = bubbleColor
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, accent.copy(alpha = 0.25f), RoundedCornerShape(20.dp))
+                .border(1.dp, accent.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
+                .animateContentSize()
                 .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
-                text = "$label • ${item.type}",
+                text = label,
                 style = MaterialTheme.typography.labelSmall,
                 color = accent
             )
@@ -681,24 +825,39 @@ fun TimelineRow(item: TimelineEntry) {
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Text(
-                text = item.text,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = if (expanded || !shouldDefaultCollapse) Int.MAX_VALUE else collapsedMaxLines,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (shouldDefaultCollapse) {
+            if (!showCollapsedCommandPreview) {
                 Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = if (expanded || !shouldDefaultCollapse) Int.MAX_VALUE else collapsedMaxLines,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (shouldDefaultCollapse) {
+                TimelineDisclosureButton(
                     text = if (expanded) "Show less" else if (isCommandLike) "Show output" else "Show more",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = accent,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .clickable { expanded = !expanded }
-                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                    accent = accent,
+                    onClick = onToggleExpanded
                 )
             }
         }
     }
+}
+
+@Composable
+private fun TimelineDisclosureButton(
+    text: String,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelSmall,
+        color = accent,
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 4.dp)
+    )
 }

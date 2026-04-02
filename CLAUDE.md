@@ -38,6 +38,11 @@ This repo is local-first now. Do not reintroduce hosted-service assumptions, rem
 - Preserve the QR/local-relay pairing path: do not regress the scanner -> saved pairing -> connect flow by letting onboarding/auto-reconnect race manual scan control.
 - For local relay recovery, keep resumed desktop-thread live mirroring and rollout fallback logic intact so reopened/running threads still recover state even when the rollout file is older than the recent-candidate window.
 
+## Android continuity notes
+
+- Android-specific implementation notes live in `CodexAndroid/docs/android-dev-notes.md`.
+- If Android parity/runtime behavior is being changed, update that file with the durable constraint or validated workaround instead of leaving the detail only in chat context.
+
 ## Build guardrails
 
 - Do not run Xcode builds/tests unless the user explicitly asks.
