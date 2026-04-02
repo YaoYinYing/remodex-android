@@ -257,6 +257,7 @@ test("thread/started refreshes only the concrete thread route", async () => {
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
+    threadPresenceChecker: () => true,
     refreshExecutor: async (targetUrl) => {
       refreshCalls.push(targetUrl);
     },
@@ -303,6 +304,7 @@ test("turn/start without a thread id waits for turn/started before refreshing th
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
+    threadPresenceChecker: () => true,
     refreshExecutor: async (targetUrl) => {
       refreshCalls.push(targetUrl);
     },
@@ -343,20 +345,22 @@ test("turn/start without a thread id waits for turn/started before refreshing th
   refresher.handleTransportReset();
 });
 
-test("multiple refresh executions for one mobile send emit a route_dance_detected trace", async () => {
+test("new mobile thread waits for rollout materialization before the first desktop refresh", async () => {
   const traceEvents = [];
-  let currentTime = 1_000;
+  let watcherHooks = null;
 
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
-    routeDanceWindowMs: 4_000,
-    now: () => currentTime,
+    threadPresenceChecker: () => false,
     refreshExecutor: async () => {},
     onTraceEvent: (event) => {
       traceEvents.push(event);
     },
-    watchThreadRolloutFactory: () => ({ stop() {} }),
+    watchThreadRolloutFactory: (hooks) => {
+      watcherHooks = hooks;
+      return { stop() {} };
+    },
   });
 
   refresher.handleInbound(JSON.stringify({
@@ -374,19 +378,21 @@ test("multiple refresh executions for one mobile send emit a route_dance_detecte
   }));
   await wait(10);
 
-  currentTime = 2_000;
-  refresher.handleOutbound(JSON.stringify({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-dance",
-      turnId: "turn-dance",
-    },
-  }));
+  assert.equal(traceEvents.some((event) => event.type === "refresh_executed"), false);
+  assert.ok(watcherHooks);
+
+  watcherHooks.onEvent({
+    reason: "materialized",
+    threadId: "thread-dance",
+    size: 10,
+  });
   await wait(10);
 
-  const danceEvents = traceEvents.filter((event) => event.type === "route_dance_detected");
-  assert.equal(danceEvents.length, 1);
-  assert.equal(danceEvents[0].targetThreadId, "thread-dance");
+  assert.deepEqual(
+    traceEvents.filter((event) => event.type === "refresh_executed").map((event) => event.targetThreadId),
+    ["thread-dance"]
+  );
+  assert.equal(traceEvents.some((event) => event.type === "route_dance_detected"), false);
 });
 
 test("rollout growth no longer triggers mid-run refreshes", async () => {
@@ -454,6 +460,7 @@ test("turn/completed bypasses duplicate-target dedupe and still stops the watche
     enabled: true,
     debounceMs: 0,
     now: () => currentTime,
+    threadPresenceChecker: () => true,
     refreshExecutor: async (targetUrl) => {
       refreshCalls.push(targetUrl);
     },
@@ -493,7 +500,6 @@ test("turn/completed bypasses duplicate-target dedupe and still stops the watche
   await wait(10);
 
   assert.deepEqual(refreshCalls, [
-    "codex://threads/thread-789",
     "codex://threads/thread-789",
   ]);
   assert.equal(stopCount, 1);
@@ -588,7 +594,6 @@ test("completion refresh keeps its own thread target even if another thread queu
   await refresher.runPendingRefresh();
 
   assert.deepEqual(refreshCalls, [
-    "codex://threads/thread-a",
     "codex://threads/thread-b",
   ]);
   assert.equal(stopCount, 1);

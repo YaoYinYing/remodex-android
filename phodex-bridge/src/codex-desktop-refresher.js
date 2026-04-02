@@ -7,7 +7,11 @@
 const { execFile } = require("child_process");
 const fs = require("fs");
 const path = require("path");
-const { createThreadRolloutActivityWatcher } = require("./rollout-watch");
+const {
+  createThreadRolloutActivityWatcher,
+  findRolloutFileForThread,
+  resolveSessionsRoot,
+} = require("./rollout-watch");
 
 const DEFAULT_BUNDLE_ID = "com.openai.codex";
 const DEFAULT_APP_PATH = "/Applications/Codex.app";
@@ -40,6 +44,7 @@ class CodexDesktopRefresher {
     traceFilePath = "",
     onTraceEvent = null,
     routeDanceWindowMs = DEFAULT_ROUTE_DANCE_WINDOW_MS,
+    threadPresenceChecker = null,
   } = {}) {
     this.enabled = enabled;
     this.debounceMs = debounceMs;
@@ -60,6 +65,9 @@ class CodexDesktopRefresher {
     this.traceFilePath = typeof traceFilePath === "string" ? traceFilePath.trim() : "";
     this.onTraceEvent = typeof onTraceEvent === "function" ? onTraceEvent : null;
     this.routeDanceWindowMs = routeDanceWindowMs;
+    this.threadPresenceChecker = typeof threadPresenceChecker === "function"
+      ? threadPresenceChecker
+      : defaultThreadPresenceChecker;
 
     this.mode = "idle";
     this.pendingNewThread = false;
@@ -142,6 +150,20 @@ class CodexDesktopRefresher {
       }
 
       const target = resolveOutboundTarget(method, parsed);
+      if (this.shouldSkipCompletionRefresh(target)) {
+        if (target?.threadId && target.threadId === this.activeWatchedThreadId) {
+          this.stopWatcher();
+          this.mode = this.pendingNewThread ? "pending_new_thread" : "idle";
+        }
+        this.trace("completion_refresh_skipped", {
+          reason: "mobile_thread_already_mounted",
+          targetUrl: target?.url || "",
+          targetThreadId: target?.threadId || "",
+          correlationId: this.activeSendCorrelation?.id || "",
+        });
+        this.finalizeSendCorrelation("completion_refresh_suppressed");
+        return;
+      }
       this.queueCompletionRefresh(target, turnId, `codex ${method}`);
       return;
     }
@@ -153,7 +175,16 @@ class CodexDesktopRefresher {
       }
       this.pendingNewThread = false;
       this.materializeSendCorrelation(target, method);
-      this.queueRefresh("phone", target, `codex ${method}`);
+      if (this.isThreadAlreadyMaterialized(target?.threadId || "")) {
+        this.queueRefresh("phone", target, `codex ${method}`);
+      } else {
+        this.trace("refresh_waiting_for_materialization", {
+          sourceMethod: method,
+          targetUrl: target?.url || "",
+          targetThreadId: target?.threadId || "",
+          correlationId: this.activeSendCorrelation?.id || "",
+        });
+      }
       if (target.threadId) {
         this.mode = "watching_thread";
         this.ensureWatcher(target.threadId);
@@ -373,6 +404,40 @@ class CodexDesktopRefresher {
     this.clearPendingCompletionTarget();
     this.clearPendingTarget();
     this.stopWatcherAfterRefreshThreadId = null;
+  }
+
+  isThreadAlreadyMaterialized(threadId) {
+    if (!threadId) {
+      return false;
+    }
+    try {
+      return !!this.threadPresenceChecker(threadId);
+    } catch {
+      return false;
+    }
+  }
+
+  shouldSkipCompletionRefresh(target) {
+    const targetThreadId = target?.threadId || "";
+    const targetUrl = target?.url || "";
+    if (!targetThreadId || !targetUrl) {
+      return false;
+    }
+
+    const recentlyOpenedSameThread = (
+      this.lastRefreshSignature === `${targetUrl}|${targetThreadId}`
+      && this.now() - this.lastRefreshAt <= this.routeDanceWindowMs
+    );
+
+    if (recentlyOpenedSameThread) {
+      return true;
+    }
+
+    if (!this.activeSendCorrelation || this.activeSendCorrelation.refreshCount <= 0) {
+      return false;
+    }
+
+    return targetThreadId === this.activeSendCorrelation.expectedThreadId;
   }
 
   beginSendCorrelation(method, target) {
@@ -879,6 +944,14 @@ function resolveOutboundTarget(method, message) {
 
 function buildThreadDeepLink(threadId) {
   return `codex://threads/${threadId}`;
+}
+
+function defaultThreadPresenceChecker(threadId) {
+  if (!threadId) {
+    return false;
+  }
+
+  return findRolloutFileForThread(resolveSessionsRoot(), threadId, { fsModule: fs }) != null;
 }
 
 function readOptionalBooleanEnv(keys, env = process.env) {
