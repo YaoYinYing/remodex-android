@@ -20,6 +20,7 @@ import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.PairingPayload
 import com.remodex.mobile.service.logging.AppLogger
 import com.remodex.mobile.service.logging.LoggerLevel
+import com.remodex.mobile.RemodexNotificationPreferences
 import com.remodex.mobile.ui.parity.LoggerScreen
 import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
@@ -55,7 +56,9 @@ private enum class AppGate {
 fun RemodexApp(
     service: CodexService = remember { CodexService() },
     notificationsEnabled: Boolean = false,
-    onRequestNotificationPermission: () -> Unit = {}
+    notificationPreferences: RemodexNotificationPreferences = RemodexNotificationPreferences(),
+    onRequestNotificationPermission: () -> Unit = {},
+    onNotificationPreferencesChanged: (RemodexNotificationPreferences) -> Unit = {}
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -344,6 +347,7 @@ fun RemodexApp(
                             "Trusted Mac: ${pairing.macDeviceId} · ${pairing.relayUrl}"
                         },
                         notificationsEnabled = notificationsEnabled,
+                        notificationPreferences = notificationPreferences,
                         rateLimitInfo = rateLimitInfo,
                         ciStatus = ciStatus,
                         bridgeInstalledVersion = bridgeInstalledVersion,
@@ -357,6 +361,7 @@ fun RemodexApp(
                         dockCollapsedSide = dockCollapsedSide,
                         onClose = { showSettingsRoute = false },
                         onRequestNotificationPermission = onRequestNotificationPermission,
+                        onNotificationPreferencesChanged = onNotificationPreferencesChanged,
                         onFontStyleChanged = { style -> fontStyleRaw = style.storageValue },
                         onToneModeChanged = { mode -> toneModeRaw = mode.name },
                         onLoggerLevelChanged = { level -> loggerLevelRaw = level.name },

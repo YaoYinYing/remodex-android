@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.remodex.mobile.RemodexNotificationPreferences
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.BridgeManagedAccountStatus
 import com.remodex.mobile.service.logging.LoggerLevel
@@ -42,6 +43,7 @@ fun WorkspaceSettingsScreen(
     hasProAccess: Boolean,
     trustedPairLabel: String?,
     notificationsEnabled: Boolean,
+    notificationPreferences: RemodexNotificationPreferences,
     rateLimitInfo: String,
     ciStatus: String,
     bridgeInstalledVersion: String?,
@@ -55,6 +57,7 @@ fun WorkspaceSettingsScreen(
     dockCollapsedSide: String,
     onClose: () -> Unit,
     onRequestNotificationPermission: () -> Unit,
+    onNotificationPreferencesChanged: (RemodexNotificationPreferences) -> Unit,
     onFontStyleChanged: (AppFontStyle) -> Unit,
     onToneModeChanged: (AppToneMode) -> Unit,
     onLoggerLevelChanged: (LoggerLevel) -> Unit,
@@ -150,7 +153,7 @@ fun WorkspaceSettingsScreen(
                     value = if (notificationsEnabled) "Authorized" else "Not requested"
                 )
                 Text(
-                    text = "Used for local alerts when a run completes while the app is in background.",
+                    text = "Pinned connection status stays available in background. Approval, rate-limit, git, and CI alerts can be toggled separately.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -162,6 +165,51 @@ fun WorkspaceSettingsScreen(
                         Text("Allow notifications")
                     }
                 }
+                NotificationToggleRow(
+                    title = "Pinned status",
+                    enabled = notificationPreferences.pinnedStatusEnabled,
+                    onToggle = {
+                        onNotificationPreferencesChanged(
+                            notificationPreferences.copy(pinnedStatusEnabled = !notificationPreferences.pinnedStatusEnabled)
+                        )
+                    }
+                )
+                NotificationToggleRow(
+                    title = "Approval alerts",
+                    enabled = notificationPreferences.permissionAlertsEnabled,
+                    onToggle = {
+                        onNotificationPreferencesChanged(
+                            notificationPreferences.copy(permissionAlertsEnabled = !notificationPreferences.permissionAlertsEnabled)
+                        )
+                    }
+                )
+                NotificationToggleRow(
+                    title = "Rate limit alerts",
+                    enabled = notificationPreferences.rateLimitAlertsEnabled,
+                    onToggle = {
+                        onNotificationPreferencesChanged(
+                            notificationPreferences.copy(rateLimitAlertsEnabled = !notificationPreferences.rateLimitAlertsEnabled)
+                        )
+                    }
+                )
+                NotificationToggleRow(
+                    title = "Git alerts",
+                    enabled = notificationPreferences.gitAlertsEnabled,
+                    onToggle = {
+                        onNotificationPreferencesChanged(
+                            notificationPreferences.copy(gitAlertsEnabled = !notificationPreferences.gitAlertsEnabled)
+                        )
+                    }
+                )
+                NotificationToggleRow(
+                    title = "CI/CD alerts",
+                    enabled = notificationPreferences.ciAlertsEnabled,
+                    onToggle = {
+                        onNotificationPreferencesChanged(
+                            notificationPreferences.copy(ciAlertsEnabled = !notificationPreferences.ciAlertsEnabled)
+                        )
+                    }
+                )
             }
         }
         item {
@@ -373,6 +421,29 @@ fun WorkspaceSettingsScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun NotificationToggleRow(
+    title: String,
+    enabled: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(modifier = Modifier.weight(1f))
+        OutlinedButton(onClick = onToggle) {
+            Text(if (enabled) "On" else "Off")
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.remodex.mobile
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -33,9 +34,14 @@ import java.util.Base64
 
 class MainActivity : ComponentActivity() {
     companion object {
-        private const val APP_CHANNEL_ID = "remodex-workflow-events"
+        private const val APP_GROUP_KEY = "remodex.workflow.events"
+        private const val STATUS_CHANNEL_ID = "remodex-status"
+        private const val PERMISSION_CHANNEL_ID = "remodex-permissions"
+        private const val RATE_LIMIT_CHANNEL_ID = "remodex-rate-limits"
+        private const val GIT_CHANNEL_ID = "remodex-git"
+        private const val CI_CHANNEL_ID = "remodex-ci"
         private const val THROTTLE_WINDOW_MS = 2_500L
-        private const val NOTIFICATION_ID_WORK_STATUS = 1001
+        private const val NOTIFICATION_ID_PINNED_STATUS = 1000
         private const val NOTIFICATION_ID_PERMISSION_REQUIRED = 1002
         private const val NOTIFICATION_ID_RATE_LIMIT = 1003
         private const val NOTIFICATION_ID_GIT_ACTION = 1004
@@ -48,7 +54,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private lateinit var service: CodexService
+    private lateinit var notificationPreferencesStore: RemodexNotificationPreferencesStore
     private var notificationsEnabled by mutableStateOf(false)
+    private var notificationPreferences by mutableStateOf(RemodexNotificationPreferences())
     private var isAppForeground: Boolean = false
     private val lastEventAtByKind = mutableMapOf<ServiceEventKind, Long>()
     private val lastEventMessageByKind = mutableMapOf<ServiceEventKind, String>()
@@ -72,9 +80,12 @@ class MainActivity : ComponentActivity() {
         service = CodexService(
             pairingStore = SharedPreferencesPairingStateStore(applicationContext)
         )
+        notificationPreferencesStore = RemodexNotificationPreferencesStore(applicationContext)
+        notificationPreferences = notificationPreferencesStore.load()
         notificationsEnabled = hasNotificationPermission()
-        createNotificationChannel()
+        createNotificationChannels()
         observeServiceEvents()
+        observePinnedStatusNotification()
         registerDebugPairingImportReceiver()
         handleDebugPairingImportFromIntent(intent)
         attemptStartupReconnectIfPaired()
@@ -82,7 +93,16 @@ class MainActivity : ComponentActivity() {
             RemodexApp(
                 service = service,
                 notificationsEnabled = notificationsEnabled,
-                onRequestNotificationPermission = { requestNotificationPermission() }
+                notificationPreferences = notificationPreferences,
+                onRequestNotificationPermission = { requestNotificationPermission() },
+                onNotificationPreferencesChanged = { nextPreferences ->
+                    notificationPreferences = nextPreferences
+                    notificationPreferencesStore.save(nextPreferences)
+                    updatePinnedStatusNotification(
+                        connectionState = service.connectionState.value,
+                        status = service.status.value
+                    )
+                }
             )
         }
     }
@@ -97,17 +117,29 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         isAppForeground = true
         service.setForegroundState(true)
+        clearTransientNotifications()
+        updatePinnedStatusNotification(
+            connectionState = service.connectionState.value,
+            status = service.status.value
+        )
     }
 
     override fun onStop() {
         super.onStop()
         isAppForeground = false
         service.setForegroundState(false)
+        updatePinnedStatusNotification(
+            connectionState = service.connectionState.value,
+            status = service.status.value
+        )
     }
 
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(debugPairingImportReceiver)
+        if (isFinishing) {
+            clearTransientNotifications()
+        }
     }
 
     private fun observeServiceEvents() {
@@ -117,20 +149,29 @@ class MainActivity : ComponentActivity() {
                     return@collect
                 }
 
+                if (event.kind == ServiceEventKind.WORK_STATUS_CHANGED) {
+                    updatePinnedStatusNotification(
+                        connectionState = service.connectionState.value,
+                        status = event.message
+                    )
+                    return@collect
+                }
+
                 if (shouldSuppressEventNotification(event)) {
                     return@collect
                 }
 
                 val notificationId = notificationIdFor(event.kind)
-                val builder = NotificationCompat.Builder(this@MainActivity, APP_CHANNEL_ID)
+                val builder = NotificationCompat.Builder(this@MainActivity, channelIdFor(event.kind))
                     .setSmallIcon(android.R.drawable.stat_notify_sync)
                     .setContentTitle(eventTitleFor(event.kind))
                     .setContentText(event.message)
                     .setStyle(NotificationCompat.BigTextStyle().bigText(event.message))
                     .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                     .setOnlyAlertOnce(true)
-                    .setSilent(event.kind == ServiceEventKind.WORK_STATUS_CHANGED)
+                    .setGroup(APP_GROUP_KEY)
                     .setAutoCancel(true)
+                    .setContentIntent(mainActivityPendingIntent())
 
                 NotificationManagerCompat.from(this@MainActivity)
                     .notify(notificationId, builder.build())
@@ -138,8 +179,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun observePinnedStatusNotification() {
+        lifecycleScope.launch {
+            service.connectionState.collect { connectionState ->
+                updatePinnedStatusNotification(
+                    connectionState = connectionState,
+                    status = service.status.value
+                )
+            }
+        }
+        lifecycleScope.launch {
+            service.status.collect { status ->
+                updatePinnedStatusNotification(
+                    connectionState = service.connectionState.value,
+                    status = status
+                )
+            }
+        }
+    }
+
     private fun shouldSuppressEventNotification(event: com.remodex.mobile.service.ServiceEvent): Boolean {
-        if (event.kind == ServiceEventKind.WORK_STATUS_CHANGED && isAppForeground) {
+        if (isAppForeground) {
+            return true
+        }
+
+        if (!isCategoryEnabled(event.kind)) {
             return true
         }
 
@@ -158,11 +222,21 @@ class MainActivity : ComponentActivity() {
 
     private fun notificationIdFor(kind: ServiceEventKind): Int {
         return when (kind) {
-            ServiceEventKind.WORK_STATUS_CHANGED -> NOTIFICATION_ID_WORK_STATUS
+            ServiceEventKind.WORK_STATUS_CHANGED -> NOTIFICATION_ID_PINNED_STATUS
             ServiceEventKind.PERMISSION_REQUIRED -> NOTIFICATION_ID_PERMISSION_REQUIRED
             ServiceEventKind.RATE_LIMIT_HIT -> NOTIFICATION_ID_RATE_LIMIT
             ServiceEventKind.GIT_ACTION -> NOTIFICATION_ID_GIT_ACTION
             ServiceEventKind.CI_CD_DONE -> NOTIFICATION_ID_CI_CD
+        }
+    }
+
+    private fun channelIdFor(kind: ServiceEventKind): String {
+        return when (kind) {
+            ServiceEventKind.WORK_STATUS_CHANGED -> STATUS_CHANNEL_ID
+            ServiceEventKind.PERMISSION_REQUIRED -> PERMISSION_CHANNEL_ID
+            ServiceEventKind.RATE_LIMIT_HIT -> RATE_LIMIT_CHANNEL_ID
+            ServiceEventKind.GIT_ACTION -> GIT_CHANNEL_ID
+            ServiceEventKind.CI_CD_DONE -> CI_CHANNEL_ID
         }
     }
 
@@ -176,13 +250,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun isCategoryEnabled(kind: ServiceEventKind): Boolean {
+        return when (kind) {
+            ServiceEventKind.WORK_STATUS_CHANGED -> notificationPreferences.pinnedStatusEnabled
+            ServiceEventKind.PERMISSION_REQUIRED -> notificationPreferences.permissionAlertsEnabled
+            ServiceEventKind.RATE_LIMIT_HIT -> notificationPreferences.rateLimitAlertsEnabled
+            ServiceEventKind.GIT_ACTION -> notificationPreferences.gitAlertsEnabled
+            ServiceEventKind.CI_CD_DONE -> notificationPreferences.ciAlertsEnabled
+        }
+    }
+
     private fun requestNotificationPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
             notificationsEnabled = true
+            updatePinnedStatusNotification(service.connectionState.value, service.status.value)
             return
         }
         if (hasNotificationPermission()) {
             notificationsEnabled = true
+            updatePinnedStatusNotification(service.connectionState.value, service.status.value)
             return
         }
         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -195,20 +281,113 @@ class MainActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
-    private fun createNotificationChannel() {
+    private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return
         }
         val manager = getSystemService(NotificationManager::class.java)
-        val channel = NotificationChannel(
-            APP_CHANNEL_ID,
-            "Remodex Workflow Events",
-            NotificationManager.IMPORTANCE_DEFAULT
-        ).apply {
-            description = "Status notifications for workspace, permissions, git, and CI events."
-        }
-        manager.createNotificationChannel(channel)
+        manager.createNotificationChannel(
+            NotificationChannel(
+                STATUS_CHANNEL_ID,
+                "Remodex Status",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Pinned connection and working status."
+                setShowBadge(false)
+            }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                PERMISSION_CHANNEL_ID,
+                "Remodex Approvals",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Approval and permission requests."
+            }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                RATE_LIMIT_CHANNEL_ID,
+                "Remodex Rate Limits",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Rate limit warnings and resets."
+            }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                GIT_CHANNEL_ID,
+                "Remodex Git",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Git actions and repository updates."
+            }
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(
+                CI_CHANNEL_ID,
+                "Remodex CI",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "CI/CD completion and failures."
+            }
+        )
     }
+
+    private fun updatePinnedStatusNotification(
+        connectionState: com.remodex.mobile.service.ConnectionState,
+        status: String
+    ) {
+        val manager = NotificationManagerCompat.from(this)
+        if (!notificationsEnabled || !notificationPreferences.pinnedStatusEnabled || isAppForeground) {
+            manager.cancel(NOTIFICATION_ID_PINNED_STATUS)
+            return
+        }
+
+        val hasPairing = service.currentPairing() != null
+        if (!hasPairing && connectionState == com.remodex.mobile.service.ConnectionState.Disconnected) {
+            manager.cancel(NOTIFICATION_ID_PINNED_STATUS)
+            return
+        }
+
+        val connectionLabel = when (connectionState) {
+            com.remodex.mobile.service.ConnectionState.Connected -> "Connected"
+            com.remodex.mobile.service.ConnectionState.Connecting -> "Connecting"
+            com.remodex.mobile.service.ConnectionState.Paired -> "Paired"
+            com.remodex.mobile.service.ConnectionState.Disconnected -> "Offline"
+            is com.remodex.mobile.service.ConnectionState.Failed -> "Failed"
+        }
+        val title = "Remodex · $connectionLabel"
+        val builder = NotificationCompat.Builder(this, STATUS_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setContentTitle(title)
+            .setContentText(status)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(status))
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setContentIntent(mainActivityPendingIntent())
+
+        manager.notify(NOTIFICATION_ID_PINNED_STATUS, builder.build())
+    }
+
+    private fun clearTransientNotifications() {
+        NotificationManagerCompat.from(this).apply {
+            cancel(NOTIFICATION_ID_PERMISSION_REQUIRED)
+            cancel(NOTIFICATION_ID_RATE_LIMIT)
+            cancel(NOTIFICATION_ID_GIT_ACTION)
+            cancel(NOTIFICATION_ID_CI_CD)
+        }
+    }
+
+    private fun mainActivityPendingIntent() =
+        PendingIntent.getActivity(
+            this,
+            0,
+            packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
     private fun registerDebugPairingImportReceiver() {
         ContextCompat.registerReceiver(
