@@ -3099,7 +3099,7 @@ class CodexService(
                 compareBy<RateLimitSummaryRow>({ it.windowDurationMins ?: Int.MAX_VALUE }, { it.label.lowercase() })
             )
             val summary = sortedRows.take(2).joinToString(" · ") { row ->
-                "${row.label} ${row.remainingPercent}% left"
+                "${row.remainingPercent}% ${row.label}"
             }
             return "Rate limit: $summary" to sortedRows.minOfOrNull { it.remainingPercent }
         }
@@ -3127,7 +3127,7 @@ class CodexService(
 
         val summary = if (limit != null || remaining != null || normalizedResetEpoch != null) {
             val resetText = normalizedResetEpoch?.let { "reset @$it" } ?: "reset unknown"
-            "Rate limit: ${remaining ?: "?"}/${limit ?: "?"} remaining, $resetText"
+            "Rate limit: ${remaining ?: "?"}/${limit ?: "?"} · $resetText"
         } else {
             "Rate limit response available but fields were empty."
         }
