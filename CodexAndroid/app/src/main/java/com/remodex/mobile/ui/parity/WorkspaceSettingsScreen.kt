@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -70,7 +72,9 @@ fun WorkspaceSettingsScreen(
     onForgetPair: () -> Unit
 ) {
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -134,15 +138,24 @@ fun WorkspaceSettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = { onToneModeChanged(AppToneMode.SYSTEM) }, modifier = Modifier.weight(1f)) {
-                        Text("System")
-                    }
-                    OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_LIGHT) }, modifier = Modifier.weight(1f)) {
-                        Text("Light")
-                    }
-                    OutlinedButton(onClick = { onToneModeChanged(AppToneMode.FORCE_DARK) }, modifier = Modifier.weight(1f)) {
-                        Text("Dark")
-                    }
+                    SettingsChoiceButton(
+                        label = "System",
+                        selected = toneMode == AppToneMode.SYSTEM,
+                        onClick = { onToneModeChanged(AppToneMode.SYSTEM) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SettingsChoiceButton(
+                        label = "Light",
+                        selected = toneMode == AppToneMode.FORCE_LIGHT,
+                        onClick = { onToneModeChanged(AppToneMode.FORCE_LIGHT) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SettingsChoiceButton(
+                        label = "Dark",
+                        selected = toneMode == AppToneMode.FORCE_DARK,
+                        onClick = { onToneModeChanged(AppToneMode.FORCE_DARK) },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
@@ -273,12 +286,12 @@ fun WorkspaceSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         availableModels.take(8).forEach { model ->
-                            OutlinedButton(
+                            SettingsChoiceButton(
+                                label = model,
+                                selected = selectedModel == model,
                                 onClick = { onSwitchModel(model) },
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(model)
-                            }
+                            )
                         }
                     }
                 }
@@ -289,12 +302,12 @@ fun WorkspaceSettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         availableReasoningEfforts.take(6).forEach { effort ->
-                            OutlinedButton(
+                            SettingsChoiceButton(
+                                label = effort,
+                                selected = selectedReasoningEffort == effort,
                                 onClick = { onSwitchReasoningEffort(effort) },
                                 modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(effort)
-                            }
+                            )
                         }
                     }
                 }
@@ -308,12 +321,18 @@ fun WorkspaceSettingsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedButton(onClick = { onDockCollapsedSideChanged("left") }, modifier = Modifier.weight(1f)) {
-                        Text("Left")
-                    }
-                    OutlinedButton(onClick = { onDockCollapsedSideChanged("right") }, modifier = Modifier.weight(1f)) {
-                        Text("Right")
-                    }
+                    SettingsChoiceButton(
+                        label = "Left",
+                        selected = dockCollapsedSide == "left",
+                        onClick = { onDockCollapsedSideChanged("left") },
+                        modifier = Modifier.weight(1f)
+                    )
+                    SettingsChoiceButton(
+                        label = "Right",
+                        selected = dockCollapsedSide == "right",
+                        onClick = { onDockCollapsedSideChanged("right") },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
@@ -442,9 +461,11 @@ private fun NotificationToggleRow(
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(modifier = Modifier.weight(1f))
-        OutlinedButton(onClick = onToggle) {
-            Text(if (enabled) "On" else "Off")
-        }
+        SettingsChoiceButton(
+            label = if (enabled) "On" else "Off",
+            selected = enabled,
+            onClick = onToggle
+        )
     }
 }
 
@@ -466,14 +487,14 @@ private fun SettingsPanel(
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
+            color = MaterialTheme.colorScheme.surface
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .border(
                         width = 1.dp,
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.9f),
                         shape = RoundedCornerShape(20.dp)
                     )
                     .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
@@ -494,17 +515,24 @@ private fun FontPreviewButton(
     modifier: Modifier = Modifier
 ) {
     val fontSet = remodexFontSet(style)
-    OutlinedButton(onClick = { onFontStyleChanged(style) }, modifier = modifier) {
+    SettingsChoiceButton(
+        label = style.title,
+        selected = selectedStyle == style,
+        onClick = { onFontStyleChanged(style) },
+        modifier = modifier,
+        supporting = {
+            Text(
+                text = if (selectedStyle == style) "Selected" else "Preview",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 text = style.title,
                 fontFamily = fontSet.prose,
                 fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = if (selectedStyle == style) "Selected" else "Preview",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -518,14 +546,54 @@ private fun LoggerLevelButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    OutlinedButton(onClick = onClick, modifier = modifier) {
+    SettingsChoiceButton(
+        label = label,
+        selected = selected,
+        onClick = onClick,
+        modifier = modifier
+    ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(text = icon, style = MaterialTheme.typography.titleMedium)
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsChoiceButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    supporting: (@Composable () -> Unit)? = null,
+    content: (@Composable () -> Unit)? = null
+) {
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.surface
+    }
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimary
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = containerColor,
+            contentColor = contentColor
+        )
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (content != null) {
+                content()
+            } else {
+                Text(text = label)
+            }
+            if (supporting != null) {
+                supporting()
+            }
         }
     }
 }

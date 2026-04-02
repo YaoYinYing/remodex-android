@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -421,6 +422,7 @@ fun WorkspaceScreen(
                 .background(pageGradient)
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
+                Spacer(modifier = Modifier.statusBarsPadding())
                 WorkspaceTopBar(
                     status = status,
                     selectedThreadTitle = selectedThread?.displayTitle,

@@ -70,6 +70,7 @@ bash ./run-local-remodex.sh --hostname 192.168.31.138 --port 9000
   - do not pre-mangle status text with aggressive clipping before Compose ellipsis
 - Settings is a dedicated screen reachable even while connected.
 - Disconnect should return to the pairing/QR route, not leave the user in the workspace shell.
+- Keep Android edge-to-edge enabled. The active theme must drive status/navigation bar styling, and top-level screens must consume the status-bar inset so the notification bar renders as part of the app surface instead of a detached OS strip.
 
 ## Composer and conversation behavior
 
