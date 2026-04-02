@@ -225,12 +225,11 @@ test("readBridgeConfig disables managed push defaults when a self-hosted relay o
   assert.equal(config.pushServiceUrl, "");
 });
 
-test("thread/start falls back once to the new-thread route when thread id is still unknown", async () => {
+test("thread/start without a concrete thread id does not refresh the desktop", async () => {
   const refreshCalls = [];
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
-    fallbackNewThreadMs: 15,
     refreshExecutor: async (targetUrl) => {
       refreshCalls.push(targetUrl);
     },
@@ -243,18 +242,17 @@ test("thread/start falls back once to the new-thread route when thread id is sti
 
   await wait(40);
 
-  assert.deepEqual(refreshCalls, ["codex://threads/new"]);
+  assert.deepEqual(refreshCalls, []);
   refresher.handleTransportReset();
 });
 
-test("thread/started cancels the fallback and refreshes the concrete thread route", async () => {
+test("thread/started refreshes only the concrete thread route", async () => {
   const refreshCalls = [];
   const watchedThreads = [];
   let stopCount = 0;
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
-    fallbackNewThreadMs: 40,
     refreshExecutor: async (targetUrl) => {
       refreshCalls.push(targetUrl);
     },
@@ -300,7 +298,6 @@ test("turn/start without a thread id waits for turn/started before refreshing th
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
-    fallbackNewThreadMs: 40,
     refreshExecutor: async (targetUrl) => {
       refreshCalls.push(targetUrl);
     },

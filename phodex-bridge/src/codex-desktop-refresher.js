@@ -18,7 +18,6 @@ const DEFAULT_ROLLOUT_LOOKUP_TIMEOUT_MS = 5_000;
 const DEFAULT_ROLLOUT_IDLE_TIMEOUT_MS = 10_000;
 const DEFAULT_CUSTOM_REFRESH_FAILURE_THRESHOLD = 3;
 const REFRESH_SCRIPT_PATH = path.join(__dirname, "scripts", "codex-refresh.applescript");
-const NEW_THREAD_DEEP_LINK = "codex://threads/new";
 
 class CodexDesktopRefresher {
   constructor({
@@ -70,7 +69,6 @@ class CodexDesktopRefresher {
     this.lastMidRunRefreshAt = 0;
     this.refreshTimer = null;
     this.refreshRunning = false;
-    this.fallbackTimer = null;
     this.activeWatcher = null;
     this.activeWatchedThreadId = null;
     this.watchStartAt = 0;
@@ -99,7 +97,6 @@ class CodexDesktopRefresher {
       this.pendingNewThread = true;
       this.mode = "pending_new_thread";
       this.clearPendingTarget();
-      this.scheduleNewThreadFallback();
       return;
     }
 
@@ -126,7 +123,6 @@ class CodexDesktopRefresher {
 
     const method = parsed.method;
     if (method === "turn/completed") {
-      this.clearFallbackTimer();
       const turnId = extractTurnId(parsed);
       if (turnId && turnId === this.lastTurnIdRefreshed) {
         this.log(`refresh skipped (debounced): completion already refreshed for ${turnId}`);
@@ -144,7 +140,6 @@ class CodexDesktopRefresher {
         return;
       }
       this.pendingNewThread = false;
-      this.clearFallbackTimer();
       this.queueRefresh("phone", target, `codex ${method}`);
       if (target.threadId) {
         this.mode = "watching_thread";
@@ -161,7 +156,6 @@ class CodexDesktopRefresher {
     this.lastRefreshAt = 0;
     this.lastRefreshSignature = "";
     this.mode = "idle";
-    this.clearFallbackTimer();
     this.stopWatcher();
   }
 
@@ -344,37 +338,6 @@ class CodexDesktopRefresher {
     this.refreshTimer = null;
   }
 
-  // Schedules a single low-cost fallback when a brand new thread id is still unknown.
-  scheduleNewThreadFallback() {
-    if (!this.canRefresh()) {
-      return;
-    }
-
-    if (this.fallbackTimer) {
-      return;
-    }
-
-    this.fallbackTimer = setTimeout(() => {
-      this.fallbackTimer = null;
-      if (!this.pendingNewThread || this.pendingTargetThreadId) {
-        return;
-      }
-
-      this.noteRefreshTarget({ threadId: null, url: NEW_THREAD_DEEP_LINK });
-      this.pendingRefreshKinds.add("phone");
-      this.scheduleRefresh("fallback thread/start");
-    }, this.fallbackNewThreadMs);
-  }
-
-  clearFallbackTimer() {
-    if (!this.fallbackTimer) {
-      return;
-    }
-
-    clearTimeout(this.fallbackTimer);
-    this.fallbackTimer = null;
-  }
-
   // Keeps one lightweight rollout watcher alive for the current Remodex-controlled thread.
   ensureWatcher(threadId) {
     if (!this.canRefresh() || !threadId) {
@@ -485,7 +448,6 @@ class CodexDesktopRefresher {
 
     this.runtimeRefreshAvailable = false;
     this.clearRefreshTimer();
-    this.clearFallbackTimer();
     this.stopWatcher();
     this.clearPendingState();
     this.mode = "idle";
@@ -718,10 +680,6 @@ function resolveInboundTarget(method, message) {
     return { threadId, url: buildThreadDeepLink(threadId) };
   }
 
-  if (method === "thread/start") {
-    return { threadId: null, url: NEW_THREAD_DEEP_LINK };
-  }
-
   return null;
 }
 
@@ -729,10 +687,6 @@ function resolveOutboundTarget(method, message) {
   const threadId = extractThreadId(message);
   if (threadId) {
     return { threadId, url: buildThreadDeepLink(threadId) };
-  }
-
-  if (method === "thread/started") {
-    return { threadId: null, url: NEW_THREAD_DEEP_LINK };
   }
 
   return null;
