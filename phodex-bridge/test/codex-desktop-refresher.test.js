@@ -461,8 +461,8 @@ test("turn/completed bypasses duplicate-target dedupe and still stops the watche
     debounceMs: 0,
     now: () => currentTime,
     threadPresenceChecker: () => true,
-    refreshExecutor: async (targetUrl) => {
-      refreshCalls.push(targetUrl);
+    refreshExecutor: async (targetUrl, refreshMode) => {
+      refreshCalls.push({ targetUrl, refreshMode });
     },
     watchThreadRolloutFactory: () => ({
       stop() {
@@ -500,7 +500,8 @@ test("turn/completed bypasses duplicate-target dedupe and still stops the watche
   await wait(10);
 
   assert.deepEqual(refreshCalls, [
-    "codex://threads/thread-789",
+    { targetUrl: "codex://threads/thread-789", refreshMode: "bounce" },
+    { targetUrl: "codex://threads/thread-789", refreshMode: "target_only" },
   ]);
   assert.equal(stopCount, 1);
 });
@@ -512,8 +513,8 @@ test("turn/completed is retried after a slow in-flight refresh finishes", async 
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 0,
-    refreshExecutor: async (targetUrl) => {
-      refreshCalls.push(targetUrl);
+    refreshExecutor: async (targetUrl, refreshMode) => {
+      refreshCalls.push({ targetUrl, refreshMode });
       if (refreshCalls.length === 1) {
         await new Promise((resolve) => {
           releaseSlowRefresh = resolve;
@@ -546,8 +547,8 @@ test("turn/completed is retried after a slow in-flight refresh finishes", async 
   await wait(20);
 
   assert.deepEqual(refreshCalls, [
-    "codex://threads/thread-slow",
-    "codex://threads/thread-slow",
+    { targetUrl: "codex://threads/thread-slow", refreshMode: "bounce" },
+    { targetUrl: "codex://threads/thread-slow", refreshMode: "target_only" },
   ]);
 });
 
@@ -558,8 +559,8 @@ test("completion refresh keeps its own thread target even if another thread queu
   const refresher = new CodexDesktopRefresher({
     enabled: true,
     debounceMs: 1_200,
-    refreshExecutor: async (targetUrl) => {
-      refreshCalls.push(targetUrl);
+    refreshExecutor: async (targetUrl, refreshMode) => {
+      refreshCalls.push({ targetUrl, refreshMode });
     },
     watchThreadRolloutFactory: ({ threadId }) => ({
       stop() {
@@ -594,7 +595,8 @@ test("completion refresh keeps its own thread target even if another thread queu
   await refresher.runPendingRefresh();
 
   assert.deepEqual(refreshCalls, [
-    "codex://threads/thread-b",
+    { targetUrl: "codex://threads/thread-a", refreshMode: "target_only" },
+    { targetUrl: "codex://threads/thread-b", refreshMode: "bounce" },
   ]);
   assert.equal(stopCount, 1);
 });

@@ -76,6 +76,7 @@ class CodexDesktopRefresher {
     this.pendingCompletionTurnId = null;
     this.pendingCompletionTargetUrl = "";
     this.pendingCompletionTargetThreadId = "";
+    this.pendingCompletionRefreshMode = "bounce";
     this.pendingTargetUrl = "";
     this.pendingTargetThreadId = "";
     this.lastRefreshAt = 0;
@@ -150,18 +151,27 @@ class CodexDesktopRefresher {
       }
 
       const target = resolveOutboundTarget(method, parsed);
-      if (this.shouldSkipCompletionRefresh(target)) {
+      const softenInFlightSameThread = (
+        this.refreshRunning
+        && !!target?.threadId
+        && target.threadId === (this.activeSendCorrelation?.expectedThreadId || "")
+      );
+      if (softenInFlightSameThread) {
+        this.queueCompletionRefresh(target, turnId, `codex ${method}`, { refreshMode: "target_only" });
+        return;
+      }
+      if (this.shouldSoftRefreshCompletion(target)) {
         if (target?.threadId && target.threadId === this.activeWatchedThreadId) {
           this.stopWatcher();
           this.mode = this.pendingNewThread ? "pending_new_thread" : "idle";
         }
-        this.trace("completion_refresh_skipped", {
+        this.trace("completion_refresh_softened", {
           reason: "mobile_thread_already_mounted",
           targetUrl: target?.url || "",
           targetThreadId: target?.threadId || "",
           correlationId: this.activeSendCorrelation?.id || "",
         });
-        this.finalizeSendCorrelation("completion_refresh_suppressed");
+        this.queueCompletionRefresh(target, turnId, `codex ${method}`, { refreshMode: "target_only" });
         return;
       }
       this.queueCompletionRefresh(target, turnId, `codex ${method}`);
@@ -217,16 +227,18 @@ class CodexDesktopRefresher {
     this.scheduleRefresh(reason);
   }
 
-  queueCompletionRefresh(target, turnId, reason) {
+  queueCompletionRefresh(target, turnId, reason, { refreshMode = "bounce" } = {}) {
     this.noteCompletionTarget(target);
     this.pendingCompletionRefresh = true;
     this.pendingCompletionTurnId = turnId;
+    this.pendingCompletionRefreshMode = refreshMode;
     this.stopWatcherAfterRefreshThreadId = target?.threadId || null;
     this.trace("completion_refresh_queued", {
       reason,
       turnId: turnId || "",
       targetUrl: target?.url || "",
       targetThreadId: target?.threadId || "",
+      refreshMode,
       correlationId: this.activeSendCorrelation?.id || "",
     });
     this.scheduleRefresh(reason);
@@ -308,6 +320,7 @@ class CodexDesktopRefresher {
     const targetThreadId = isCompletionRun
       ? this.pendingCompletionTargetThreadId
       : this.pendingTargetThreadId;
+    const refreshMode = isCompletionRun ? this.pendingCompletionRefreshMode : "bounce";
     const stopWatcherAfterRefreshThreadId = isCompletionRun
       ? this.stopWatcherAfterRefreshThreadId
       : null;
@@ -316,6 +329,7 @@ class CodexDesktopRefresher {
     if (isCompletionRun) {
       this.pendingCompletionRefresh = false;
       this.pendingCompletionTurnId = null;
+      this.pendingCompletionRefreshMode = "bounce";
       this.clearPendingCompletionTarget();
       this.stopWatcherAfterRefreshThreadId = null;
     } else {
@@ -343,7 +357,7 @@ class CodexDesktopRefresher {
           correlationId: this.activeSendCorrelation?.id || "",
         });
       } else {
-        await this.executeRefresh(targetUrl);
+        await this.executeRefresh(targetUrl, refreshMode);
         this.lastRefreshAt = this.now();
         this.lastRefreshSignature = refreshSignature;
         this.consecutiveRefreshFailures = 0;
@@ -354,6 +368,7 @@ class CodexDesktopRefresher {
           pendingRefreshKinds: Array.from(pendingRefreshKinds),
           completionTurnId: completionTurnId || "",
           refreshSignature,
+          refreshMode,
         });
       }
       if (completionTurnId && didRefresh) {
@@ -379,9 +394,9 @@ class CodexDesktopRefresher {
     }
   }
 
-  executeRefresh(targetUrl) {
+  executeRefresh(targetUrl, refreshMode = "bounce") {
     if (this.refreshExecutor) {
-      return this.refreshExecutor(targetUrl || "");
+      return this.refreshExecutor(targetUrl || "", refreshMode);
     }
 
     if (this.refreshCommand) {
@@ -393,6 +408,7 @@ class CodexDesktopRefresher {
       this.bundleId,
       this.appPath,
       targetUrl || "",
+      refreshMode,
     ]);
   }
 
@@ -401,6 +417,7 @@ class CodexDesktopRefresher {
     this.pendingRefreshKinds.clear();
     this.pendingCompletionRefresh = false;
     this.pendingCompletionTurnId = null;
+    this.pendingCompletionRefreshMode = "bounce";
     this.clearPendingCompletionTarget();
     this.clearPendingTarget();
     this.stopWatcherAfterRefreshThreadId = null;
@@ -417,7 +434,7 @@ class CodexDesktopRefresher {
     }
   }
 
-  shouldSkipCompletionRefresh(target) {
+  shouldSoftRefreshCompletion(target) {
     const targetThreadId = target?.threadId || "";
     const targetUrl = target?.url || "";
     if (!targetThreadId || !targetUrl) {
@@ -430,6 +447,15 @@ class CodexDesktopRefresher {
     );
 
     if (recentlyOpenedSameThread) {
+      return true;
+    }
+
+    const sameThreadStillOpening = (
+      this.refreshRunning
+      && this.pendingTargetThreadId === targetThreadId
+      && this.pendingTargetUrl === targetUrl
+    );
+    if (sameThreadStillOpening) {
       return true;
     }
 
@@ -485,6 +511,7 @@ class CodexDesktopRefresher {
     pendingRefreshKinds,
     completionTurnId,
     refreshSignature,
+    refreshMode = "bounce",
   }) {
     if (
       this.activeSendCorrelation
@@ -503,17 +530,19 @@ class CodexDesktopRefresher {
         targetUrl,
         targetThreadId,
         kinds: Array.isArray(pendingRefreshKinds) ? pendingRefreshKinds : [],
+        refreshMode,
       });
 
       if (!correlation.firstRefreshAt) {
         correlation.firstRefreshAt = now;
-      } else if (now - correlation.firstRefreshAt <= this.routeDanceWindowMs) {
+      } else if (refreshMode !== "target_only" && now - correlation.firstRefreshAt <= this.routeDanceWindowMs) {
         this.trace("route_dance_detected", {
           correlationId: correlation.id,
           method: correlation.method,
           refreshCount: correlation.refreshCount,
           targetUrl,
           targetThreadId,
+          refreshMode,
           expectedThreadId: correlation.expectedThreadId,
           expectedUrl: correlation.expectedUrl,
           executedTargets: correlation.executedTargets,
@@ -528,6 +557,7 @@ class CodexDesktopRefresher {
       pendingRefreshKinds: Array.isArray(pendingRefreshKinds) ? pendingRefreshKinds : [],
       completionTurnId,
       refreshSignature,
+      refreshMode,
     });
   }
 

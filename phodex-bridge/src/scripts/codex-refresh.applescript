@@ -8,9 +8,13 @@ on run argv
   set appPath to item 2 of argv
   set targetUrl to ""
   set bounceUrl to "codex://settings"
+  set refreshMode to "bounce"
 
   if (count of argv) is greater than or equal to 3 then
     set targetUrl to item 3 of argv
+  end if
+  if (count of argv) is greater than or equal to 4 then
+    set refreshMode to item 4 of argv
   end if
 
   try
@@ -19,8 +23,10 @@ on run argv
 
   delay 0.12
 
-  my openCodexUrl(bundleId, appPath, bounceUrl)
-  delay 0.18
+  if refreshMode is "bounce" then
+    my openCodexUrl(bundleId, appPath, bounceUrl)
+    delay 0.18
+  end if
 
   if targetUrl is not "" then
     my openCodexUrl(bundleId, appPath, targetUrl)
