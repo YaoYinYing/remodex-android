@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -156,14 +158,20 @@ fun SectionCard(
 fun CompactToolbarButton(
     label: String,
     onClick: () -> Unit,
+    compact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     OutlinedButton(
         onClick = onClick,
-        modifier = modifier,
-        shape = RoundedCornerShape(18.dp)
+        modifier = if (compact) modifier.size(40.dp) else modifier,
+        shape = RoundedCornerShape(if (compact) 16.dp else 18.dp),
+        contentPadding = if (compact) PaddingValues(0.dp) else ButtonDefaults.ContentPadding
     ) {
-        Text(label)
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = if (compact) 0.dp else 2.dp),
+            style = if (compact) MaterialTheme.typography.labelLarge else MaterialTheme.typography.bodyMedium
+        )
     }
 }
 
@@ -777,6 +785,13 @@ private fun SystemTimelineBlock(
     collapsedMaxLines: Int,
     onToggleExpanded: () -> Unit
 ) {
+    val diffEntries = remember(text, normalizedType) {
+        if (normalizedType.contains("diff") || normalizedType.contains("filechange")) {
+            DiffPreviewParser.parse(text)
+        } else {
+            emptyList()
+        }
+    }
     val accent = when {
         normalizedType.contains("plan") -> PlanAccent
         normalizedType.contains("reasoning") -> AlertAmber
@@ -865,6 +880,43 @@ private fun SystemTimelineBlock(
                     maxLines = if (expanded || !shouldDefaultCollapse) Int.MAX_VALUE else collapsedMaxLines,
                     overflow = TextOverflow.Ellipsis
                 )
+            }
+            if (diffEntries.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    diffEntries.take(if (expanded) diffEntries.size else 2).forEach { entry ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = entry.compactPath,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "+${entry.additions}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFF22A95A)
+                                )
+                                Text(
+                                    text = "-${entry.deletions}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFD74B4B)
+                                )
+                            }
+                        }
+                    }
+                }
             }
             if (shouldDefaultCollapse) {
                 TimelineDisclosureButton(

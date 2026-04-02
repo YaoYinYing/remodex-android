@@ -10,7 +10,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -42,6 +41,7 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
@@ -65,6 +65,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.remodex.mobile.model.ThreadSummary
 import com.remodex.mobile.model.TimelineEntry
 import com.remodex.mobile.service.CodexService
@@ -155,6 +156,11 @@ fun WorkspaceScreen(
     var isDispatching by rememberSaveable(selectedThreadId) { mutableStateOf(false) }
     var voiceDraftText by rememberSaveable { mutableStateOf("") }
     var showVoiceSetupSheet by rememberSaveable { mutableStateOf(false) }
+    var showGitActionsMenu by rememberSaveable { mutableStateOf(false) }
+    var showRepositoryDiffDialog by rememberSaveable { mutableStateOf(false) }
+    var repositoryDiffPatch by rememberSaveable { mutableStateOf("") }
+    var showCommitSheet by rememberSaveable { mutableStateOf(false) }
+    var commitMessageDraft by rememberSaveable { mutableStateOf("") }
     val context = LocalContext.current
     val timelineListState = rememberLazyListState()
     val galleryPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -364,6 +370,22 @@ fun WorkspaceScreen(
                         scope.launch { runCatching { drawerState.close() } }
                         onOpenSettings()
                     },
+                    onGitDiff = {
+                        scope.launch {
+                            runCatching { service.gitDiff() }
+                                .onSuccess { patch ->
+                                    repositoryDiffPatch = patch
+                                    showRepositoryDiffDialog = true
+                                }
+                        }
+                    },
+                    onGitCommit = {
+                        showCommitSheet = true
+                    },
+                    onGitCommitAndPush = {
+                        commitMessageDraft = ""
+                        showCommitSheet = true
+                    },
                     onGitPull = {
                         scope.launch { runCatching { service.gitPull() } }
                     },
@@ -402,7 +424,9 @@ fun WorkspaceScreen(
                 WorkspaceTopBar(
                     status = status,
                     selectedThreadTitle = selectedThread?.displayTitle,
+                    currentProjectPath = normalizedProjectPath,
                     gitStatusSummary = gitStatusSummary,
+                    checkoutBranch = checkoutBranch,
                     hasPendingPermissions = pendingPermissions.isNotEmpty(),
                     onMenu = {
                         scope.launch { drawerState.open() }
@@ -410,6 +434,16 @@ fun WorkspaceScreen(
                     onRefresh = {
                         scope.launch { runCatching { service.forceRefreshWorkspace() } }
                     },
+                    onShowRepositoryDiff = {
+                        scope.launch {
+                            runCatching { service.gitDiff() }
+                                .onSuccess { patch ->
+                                    repositoryDiffPatch = patch
+                                    showRepositoryDiffDialog = true
+                                }
+                        }
+                    },
+                    onOpenGitActions = { showGitActionsMenu = true },
                     onTap = onHeaderTap
                 )
 
@@ -581,6 +615,7 @@ fun WorkspaceScreen(
                                     attachmentHint = null
                                 }
                             },
+                            onToggleSubagentsArmed = { subagentsArmed = !subagentsArmed },
                             onClearSubagentsArmed = { subagentsArmed = false },
                             onClearReviewTarget = { armedReviewTarget = null },
                             onRemoveMentionedFile = { mention -> mentionedFiles.remove(mention) },
@@ -902,6 +937,70 @@ fun WorkspaceScreen(
                                 onDismiss = { showVoiceSetupSheet = false }
                             )
                         }
+
+                        if (showGitActionsMenu) {
+                            GitActionsDialog(
+                                selectedBranch = checkoutBranch,
+                                onDismiss = { showGitActionsMenu = false },
+                                onShowDiff = {
+                                    showGitActionsMenu = false
+                                    scope.launch {
+                                        runCatching { service.gitDiff() }
+                                            .onSuccess { patch ->
+                                                repositoryDiffPatch = patch
+                                                showRepositoryDiffDialog = true
+                                            }
+                                    }
+                                },
+                                onPull = {
+                                    showGitActionsMenu = false
+                                    scope.launch { runCatching { service.gitPull() } }
+                                },
+                                onPush = {
+                                    showGitActionsMenu = false
+                                    scope.launch { runCatching { service.gitPush() } }
+                                },
+                                onCommit = {
+                                    showGitActionsMenu = false
+                                    showCommitSheet = true
+                                },
+                                onCommitAndPush = {
+                                    showGitActionsMenu = false
+                                    showCommitSheet = true
+                                }
+                            )
+                        }
+
+                        if (showRepositoryDiffDialog) {
+                            DiffPreviewDialog(
+                                title = "Repository Changes",
+                                rawPatch = repositoryDiffPatch,
+                                onDismiss = { showRepositoryDiffDialog = false }
+                            )
+                        }
+
+                        if (showCommitSheet) {
+                            CommitComposerDialog(
+                                message = commitMessageDraft,
+                                onMessageChange = { commitMessageDraft = it },
+                                onDismiss = {
+                                    showCommitSheet = false
+                                    commitMessageDraft = ""
+                                },
+                                onCommit = {
+                                    val message = commitMessageDraft
+                                    showCommitSheet = false
+                                    commitMessageDraft = ""
+                                    scope.launch { runCatching { service.gitCommit(message) } }
+                                },
+                                onCommitAndPush = {
+                                    val message = commitMessageDraft
+                                    showCommitSheet = false
+                                    commitMessageDraft = ""
+                                    scope.launch { runCatching { service.gitCommitAndPush(message) } }
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -941,10 +1040,14 @@ private fun VoiceSetupHelpDialog(
 private fun WorkspaceTopBar(
     status: String,
     selectedThreadTitle: String?,
+    currentProjectPath: String?,
     gitStatusSummary: String,
+    checkoutBranch: String,
     hasPendingPermissions: Boolean,
     onMenu: () -> Unit,
     onRefresh: () -> Unit,
+    onShowRepositoryDiff: () -> Unit,
+    onOpenGitActions: () -> Unit,
     onTap: () -> Unit
 ) {
     Surface(
@@ -963,10 +1066,11 @@ private fun WorkspaceTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                CompactToolbarButton(label = "☰", onClick = onMenu)
+                CompactToolbarButton(label = "≡", onClick = onMenu, compact = true)
                 Column(
                     modifier = Modifier
                         .weight(1f)
+                        .padding(horizontal = 2.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .clickable(onClick = onTap),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
@@ -976,26 +1080,35 @@ private fun WorkspaceTopBar(
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = if (selectedThreadTitle.isNullOrBlank()) {
-                            Modifier
-                        } else {
-                            Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                        }
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = if (selectedThreadTitle == null) {
-                            status
-                        } else {
-                            middleClip(gitStatusSummary, maxChars = 56)
+                        text = when {
+                            selectedThreadTitle == null -> status
+                            !currentProjectPath.isNullOrBlank() -> currentProjectPath
+                            else -> gitStatusSummary
                         },
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
-                CompactToolbarButton(label = "↻", onClick = onRefresh)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (selectedThreadTitle != null) {
+                        StatusPill(
+                            text = checkoutBranch.ifBlank { "chat" }.take(10),
+                            accent = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    CompactToolbarButton(label = "∆", onClick = onShowRepositoryDiff, compact = true)
+                    CompactToolbarButton(label = "⋯", onClick = onOpenGitActions, compact = true)
+                    CompactToolbarButton(label = "↻", onClick = onRefresh, compact = true)
+                }
             }
 
             if (hasPendingPermissions) {
@@ -1006,6 +1119,208 @@ private fun WorkspaceTopBar(
                 ) {
                     StatusPill(text = "Needs approval", accent = Color(0xFFE6A23C))
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitActionsDialog(
+    selectedBranch: String,
+    onDismiss: () -> Unit,
+    onShowDiff: () -> Unit,
+    onPull: () -> Unit,
+    onPush: () -> Unit,
+    onCommit: () -> Unit,
+    onCommitAndPush: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "Git Actions",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (selectedBranch.isNotBlank()) {
+                    Text(
+                        text = "Branch $selectedBranch",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                GitActionMenuRow("∆", "Diff", onShowDiff)
+                GitActionMenuRow("✓", "Commit", onCommit)
+                GitActionMenuRow("⇪", "Commit & Push", onCommitAndPush)
+                GitActionMenuRow("↑", "Push", onPush)
+                GitActionMenuRow("↻", "Pull", onPull)
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Close")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GitActionMenuRow(
+    iconGlyph: String,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = iconGlyph,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+        }
+    }
+}
+
+@Composable
+private fun CommitComposerDialog(
+    message: String,
+    onMessageChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onCommit: () -> Unit,
+    onCommitAndPush: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text("Commit Changes", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                OutlinedTextField(
+                    value = message,
+                    onValueChange = onMessageChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Commit message") },
+                    placeholder = { Text("Changes from Android") },
+                    minLines = 2,
+                    maxLines = 4
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
+                        Text("Cancel")
+                    }
+                    OutlinedButton(onClick = onCommit, modifier = Modifier.weight(1f)) {
+                        Text("Commit")
+                    }
+                    Button(onClick = onCommitAndPush, modifier = Modifier.weight(1f)) {
+                        Text("Commit & Push")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiffPreviewDialog(
+    title: String,
+    rawPatch: String,
+    onDismiss: () -> Unit
+) {
+    val entries = remember(rawPatch) { DiffPreviewParser.parse(rawPatch) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = MaterialTheme.colorScheme.surface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                LazyColumn(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(entries, key = { it.path }) { entry ->
+                        DiffPreviewCard(entry = entry)
+                    }
+                }
+                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
+                    Text("Done")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiffPreviewCard(entry: DiffPreviewEntry) {
+    var expanded by rememberSaveable(entry.path) { mutableStateOf(false) }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(entry.compactPath, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                Text(entry.action, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                Text("+${entry.additions}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF22A95A))
+                Text("-${entry.deletions}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFD74B4B))
+            }
+            entry.directoryPath?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text(
+                text = entry.diff,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = if (expanded) Int.MAX_VALUE else 8,
+                overflow = TextOverflow.Ellipsis
+            )
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(if (expanded) "Show less" else "Show patch")
             }
         }
     }
@@ -1243,6 +1558,7 @@ private fun ComposerDock(
     onSwitchModel: (String) -> Unit,
     onSwitchReasoningEffort: (String) -> Unit,
     onRemoveAttachment: (TurnImageAttachment) -> Unit,
+    onToggleSubagentsArmed: () -> Unit,
     onClearSubagentsArmed: () -> Unit,
     onClearReviewTarget: () -> Unit,
     onRemoveMentionedFile: (String) -> Unit,
@@ -1543,6 +1859,7 @@ private fun ComposerDock(
                     ComposerBottomBar(
                         selectedModel = selectedModel,
                         selectedReasoningEffort = selectedReasoningEffort,
+                        subagentsArmed = subagentsArmed,
                         queuePaused = queuePaused,
                         queuedCount = queuedDrafts.size,
                         showAdvancedActions = showAdvancedActions,
@@ -1563,6 +1880,7 @@ private fun ComposerDock(
                                 showModelMenu = false
                             }
                         },
+                        onToggleSubagents = onToggleSubagentsArmed,
                         onResumeQueue = { onQueuePausedChange(false) },
                         onUseVoiceDraft = onUseVoiceDraft,
                         onCheckRateLimits = onCheckRateLimits,
@@ -1619,7 +1937,8 @@ private fun ComposerSecondaryBar(
         }
         Spacer(modifier = Modifier.weight(1f))
         ComposerCircleButton(
-            label = statusLabel.ifBlank { "Status" },
+            glyph = "⌁",
+            contentDescription = statusLabel.ifBlank { "Status" },
             filled = false,
             onClick = onRefreshStatus,
             compact = true
@@ -1631,6 +1950,7 @@ private fun ComposerSecondaryBar(
 private fun ComposerBottomBar(
     selectedModel: String,
     selectedReasoningEffort: String,
+    subagentsArmed: Boolean,
     queuePaused: Boolean,
     queuedCount: Int,
     showAdvancedActions: Boolean,
@@ -1641,6 +1961,7 @@ private fun ComposerBottomBar(
     onToggleAdvancedActions: () -> Unit,
     onToggleModelMenu: () -> Unit,
     onToggleReasoningMenu: () -> Unit,
+    onToggleSubagents: () -> Unit,
     onResumeQueue: () -> Unit,
     onUseVoiceDraft: () -> Unit,
     onCheckRateLimits: () -> Unit,
@@ -1655,7 +1976,8 @@ private fun ComposerBottomBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         ComposerCircleButton(
-            label = if (showAdvancedActions) "-" else "+",
+            glyph = if (showAdvancedActions) "−" else "+",
+            contentDescription = if (showAdvancedActions) "Hide attachments" else "Show attachments",
             filled = false,
             onClick = onToggleAdvancedActions,
             enabled = !isDispatching
@@ -1671,7 +1993,16 @@ private fun ComposerBottomBar(
             onClick = { if (!isDispatching) onToggleReasoningMenu() }
         )
         ComposerCircleButton(
-            label = "RL",
+            glyph = "✦",
+            contentDescription = "Toggle subagents",
+            filled = subagentsArmed,
+            onClick = onToggleSubagents,
+            enabled = !isDispatching,
+            compact = true
+        )
+        ComposerCircleButton(
+            glyph = "⌁",
+            contentDescription = "Refresh rate limits",
             filled = false,
             onClick = onCheckRateLimits,
             enabled = !isDispatching,
@@ -1679,15 +2010,27 @@ private fun ComposerBottomBar(
         )
         Spacer(modifier = Modifier.weight(1f))
         if (queuePaused && queuedCount > 0) {
-            ComposerCircleButton(label = "R", filled = false, onClick = onResumeQueue)
+            ComposerCircleButton(
+                glyph = "↻",
+                contentDescription = "Resume queue",
+                filled = false,
+                onClick = onResumeQueue
+            )
         }
-        ComposerCircleButton(label = "Mic", filled = false, onClick = onUseVoiceDraft, enabled = !isDispatching)
         ComposerCircleButton(
-            label = when {
-                isDispatching -> "..."
-                showsPrimaryStop -> "Stop"
-                else -> "Up"
+            glyph = "◉",
+            contentDescription = "Voice draft",
+            filled = false,
+            onClick = onUseVoiceDraft,
+            enabled = !isDispatching
+        )
+        ComposerCircleButton(
+            glyph = when {
+                isDispatching -> "…"
+                showsPrimaryStop -> "■"
+                else -> "↑"
             },
+            contentDescription = if (showsPrimaryStop) "Stop current turn" else "Send message",
             filled = true,
             onClick = if (isDispatching) ({}) else if (showsPrimaryStop) onStop else onSend,
             enabled = !isDispatching || showsPrimaryStop
@@ -1710,12 +2053,22 @@ private fun CollapsedComposerHandle(
         tonalElevation = 6.dp,
         shadowElevation = 12.dp
     ) {
-        Text(
-            text = "Compose",
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurface
-        )
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "✎",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "Ask",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
     }
 }
 
@@ -1799,7 +2152,8 @@ private fun ComposerMenuPill(
 
 @Composable
 private fun ComposerCircleButton(
-    label: String,
+    glyph: String,
+    contentDescription: String,
     filled: Boolean,
     onClick: () -> Unit,
     compact: Boolean = false,
@@ -1821,19 +2175,20 @@ private fun ComposerCircleButton(
         )
     ) {
         Text(
-            text = label,
-            modifier = Modifier.padding(
-                horizontal = if (compact) 12.dp else 11.dp,
-                vertical = if (compact) 8.dp else 9.dp
-            ),
-            style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+            text = glyph,
+            style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleMedium,
             color = if (filled) {
                 MaterialTheme.colorScheme.surface.copy(alpha = if (enabled) 1f else 0.78f)
             } else {
                 MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.58f)
             },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            modifier = Modifier
+                .padding(
+                    horizontal = if (compact) 11.dp else 10.dp,
+                    vertical = if (compact) 8.dp else 9.dp
+                )
+                .size(if (compact) 18.dp else 20.dp),
+            textAlign = TextAlign.Center
         )
     }
 }

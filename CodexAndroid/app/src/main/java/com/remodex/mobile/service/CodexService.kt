@@ -2270,6 +2270,21 @@ class CodexService(
         }
     }
 
+    suspend fun gitDiff(): String {
+        ensureConnected()
+        val gitScope = requireSelectedThreadGitScope()
+        val response = requestRpc(
+            method = "git/diff",
+            params = buildGitParams(gitScope)
+        )
+        throwIfRpcError(response, "git/diff")
+        val result = response.result as? JsonObject
+            ?: throw IllegalStateException("git/diff result is missing.")
+        return result.string("patch", "diff", "unifiedDiff", "unified_diff")
+            ?.trim()
+            .orEmpty()
+    }
+
     suspend fun gitCommit(message: String?) {
         ensureConnected()
         val gitScope = requireSelectedThreadGitScope()
@@ -2301,6 +2316,42 @@ class CodexService(
                 } else {
                     "Committed changes via $activeTransportLabel."
                 },
+                notify = true,
+                eventKind = ServiceEventKind.GIT_ACTION
+            )
+        }
+    }
+
+    suspend fun gitCommitAndPush(message: String?) {
+        ensureConnected()
+        val gitScope = requireSelectedThreadGitScope()
+        val normalizedMessage = message?.trim().orEmpty()
+        withGitActionProgress("Commit & push…") {
+            val commitParams = if (normalizedMessage.isEmpty()) {
+                buildGitParams(gitScope)
+            } else {
+                JsonObject(
+                    mapOf(
+                        "message" to JsonPrimitive(normalizedMessage),
+                        "cwd" to JsonPrimitive(gitScope.cwd),
+                        "threadId" to JsonPrimitive(gitScope.threadId)
+                    )
+                )
+            }
+            val commitResponse = requestRpc(
+                method = "git/commit",
+                params = commitParams
+            )
+            throwIfRpcError(commitResponse, "git/commit")
+            val pushResponse = requestRpc(
+                method = "git/push",
+                params = buildGitParams(gitScope)
+            )
+            throwIfRpcError(pushResponse, "git/push")
+            refreshGitStatus(silentStatus = true)
+            refreshGitBranches(silentStatus = true)
+            setStatus(
+                "Commit & push completed via $activeTransportLabel.",
                 notify = true,
                 eventKind = ServiceEventKind.GIT_ACTION
             )

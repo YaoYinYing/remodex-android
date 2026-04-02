@@ -45,6 +45,9 @@ fun SidebarDrawerContent(
     onAutoRefreshChanged: (Boolean) -> Unit,
     onRefreshWorkspace: () -> Unit,
     onOpenSettings: () -> Unit,
+    onGitDiff: () -> Unit,
+    onGitCommit: () -> Unit,
+    onGitCommitAndPush: () -> Unit,
     onGitPull: () -> Unit,
     onGitPush: () -> Unit,
     onRenameThread: (threadId: String, name: String) -> Unit,
@@ -83,8 +86,8 @@ fun SidebarDrawerContent(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         SidebarIdentityHeader(onOpenSettings = onOpenSettings)
 
@@ -293,6 +296,20 @@ fun SidebarDrawerContent(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                OutlinedButton(onClick = onGitDiff, modifier = Modifier.weight(1f)) {
+                    Text("Diff")
+                }
+                OutlinedButton(onClick = onGitCommit, modifier = Modifier.weight(1f)) {
+                    Text("Commit")
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(onClick = onGitCommitAndPush, modifier = Modifier.weight(1f)) {
+                    Text("Commit & Push")
+                }
                 OutlinedButton(onClick = onGitPull, modifier = Modifier.weight(1f)) {
                     Text("Pull")
                 }
@@ -327,7 +344,7 @@ private fun SidebarIdentityHeader(onOpenSettings: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp),
+            .padding(horizontal = 4.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
@@ -345,7 +362,7 @@ private fun SidebarIdentityHeader(onOpenSettings: () -> Unit) {
             )
             Text(
                 text = "Remodex",
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
