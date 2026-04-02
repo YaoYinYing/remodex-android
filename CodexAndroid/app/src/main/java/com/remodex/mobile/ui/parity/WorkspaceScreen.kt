@@ -450,7 +450,7 @@ fun WorkspaceScreen(
                             if (pendingPermissions.isNotEmpty()) {
                                 item {
                                     InlineStatusCard(
-                                        title = "Permission required",
+                                        title = "Approval request",
                                         body = "${pendingPermissions.size} action${if (pendingPermissions.size == 1) "" else "s"} waiting for approval.",
                                         accent = Color(0xFFE6A23C)
                                     )

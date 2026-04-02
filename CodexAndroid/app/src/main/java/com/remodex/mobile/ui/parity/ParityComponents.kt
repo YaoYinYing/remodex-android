@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -375,41 +376,72 @@ fun PermissionRow(
     onAllow: () -> Unit,
     onDeny: () -> Unit
 ) {
+    val commandLikeBody = request.summary?.trim().orEmpty()
+    val primaryBody = commandLikeBody.ifBlank { request.title }
+    val isCommandLike = remember(primaryBody) {
+        val lowered = primaryBody.lowercase()
+        primaryBody.contains('\n')
+            || primaryBody.contains("/")
+            || primaryBody.contains("--")
+            || lowered.startsWith("git ")
+            || lowered.startsWith("bash ")
+            || lowered.startsWith("npm ")
+            || lowered.startsWith("pnpm ")
+            || lowered.startsWith("yarn ")
+            || lowered.startsWith("python ")
+            || lowered.startsWith("python3 ")
+            || lowered.startsWith("node ")
+            || lowered.startsWith("cargo ")
+            || lowered.startsWith("make ")
+            || lowered.startsWith("uv ")
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(18.dp))
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f), RoundedCornerShape(16.dp))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(
-                text = request.title,
-                style = MaterialTheme.typography.titleMedium,
+                text = "Approval request",
+                style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
-            Text(
-                text = request.id,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (!request.summary.isNullOrBlank()) {
+
+            if (isCommandLike) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                ) {
+                    Text(
+                        text = primaryBody,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                    )
+                }
+            } else {
                 Text(
-                    text = request.summary,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    text = primaryBody,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = onDeny, modifier = Modifier.weight(1f)) {
                     Text("Deny")
                 }
                 Button(onClick = onAllow, modifier = Modifier.weight(1f)) {
-                    Text("Allow")
+                    Text("Approve")
                 }
             }
         }
