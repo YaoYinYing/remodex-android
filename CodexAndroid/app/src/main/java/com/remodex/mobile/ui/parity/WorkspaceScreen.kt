@@ -1716,8 +1716,8 @@ private fun ComposerDock(
                     modifier = Modifier
                         .fillMaxWidth()
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
-                        .padding(top = 10.dp, bottom = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(top = 12.dp, bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (
                         mediaAttachments.isNotEmpty()
@@ -1816,7 +1816,8 @@ private fun ComposerDock(
                                     isInputFocused = focusState.isFocused
                                 },
                             minLines = 1,
-                            maxLines = 4
+                            maxLines = 5,
+                            shape = RoundedCornerShape(18.dp)
                         )
                     }
                     if (showModelMenu && availableModels.isNotEmpty()) {
@@ -1856,6 +1857,13 @@ private fun ComposerDock(
                             )
                         }
                     }
+                    ComposerMetaRow(
+                        selectedBranch = selectedBranch,
+                        hasBranch = selectedBranch.isNotBlank(),
+                        rateLimitInfo = rateLimitInfo,
+                        ciStatus = ciStatus,
+                        onRefreshStatus = onCheckRateLimits
+                    )
                     ComposerBottomBar(
                         selectedModel = selectedModel,
                         selectedReasoningEffort = selectedReasoningEffort,
@@ -1900,20 +1908,12 @@ private fun ComposerDock(
                 ),
                 onExpand = { isCollapsed = false }
             )
-        } else if (!isInputFocused) {
-            ComposerSecondaryBar(
-                selectedBranch = selectedBranch,
-                hasBranch = selectedBranch.isNotBlank(),
-                rateLimitInfo = rateLimitInfo,
-                ciStatus = ciStatus,
-                onRefreshStatus = onCheckRateLimits
-            )
         }
     }
 }
 
 @Composable
-private fun ComposerSecondaryBar(
+private fun ComposerMetaRow(
     selectedBranch: String,
     hasBranch: Boolean,
     rateLimitInfo: String,
@@ -1927,22 +1927,23 @@ private fun ComposerSecondaryBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ComposerMenuPill(title = "Local", selected = false, onClick = {})
+        ComposerMenuPill(title = "Local", selected = false, onClick = {}, showChevron = false)
         if (hasBranch) {
-            ComposerMenuPill(title = selectedBranch, selected = true, onClick = {})
+            ComposerMenuPill(title = selectedBranch, selected = true, onClick = {}, showChevron = false)
         }
         val statusLabel = when {
             ciStatus.isNotBlank() -> ciStatus.removePrefix("CI status: ").trim()
             else -> rateLimitInfo.removePrefix("Rate limit: ").trim()
         }
         Spacer(modifier = Modifier.weight(1f))
-        ComposerCircleButton(
-            glyph = "⌁",
-            contentDescription = statusLabel.ifBlank { "Status" },
-            filled = false,
-            onClick = onRefreshStatus,
-            compact = true
-        )
+        if (statusLabel.isNotBlank()) {
+            ComposerMenuPill(
+                title = statusLabel,
+                selected = false,
+                onClick = onRefreshStatus,
+                showChevron = false
+            )
+        }
     }
 }
 
@@ -1975,40 +1976,40 @@ private fun ComposerBottomBar(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ComposerCircleButton(
-            glyph = if (showAdvancedActions) "−" else "+",
-            contentDescription = if (showAdvancedActions) "Hide attachments" else "Show attachments",
-            filled = false,
-            onClick = onToggleAdvancedActions,
-            enabled = !isDispatching
-        )
-        ComposerMenuPill(
-            title = selectedModel,
-            selected = showModelMenu,
-            onClick = { if (!isDispatching) onToggleModelMenu() }
-        )
-        ComposerMenuPill(
-            title = selectedReasoningEffort,
-            selected = showReasoningMenu,
-            onClick = { if (!isDispatching) onToggleReasoningMenu() }
-        )
-        ComposerCircleButton(
-            glyph = "✦",
-            contentDescription = "Toggle subagents",
-            filled = subagentsArmed,
-            onClick = onToggleSubagents,
-            enabled = !isDispatching,
-            compact = true
-        )
-        ComposerCircleButton(
-            glyph = "⌁",
-            contentDescription = "Refresh rate limits",
-            filled = false,
-            onClick = onCheckRateLimits,
-            enabled = !isDispatching,
-            compact = true
-        )
-        Spacer(modifier = Modifier.weight(1f))
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ComposerCircleButton(
+                glyph = if (showAdvancedActions) "−" else "+",
+                contentDescription = if (showAdvancedActions) "Hide attachments" else "Show attachments",
+                filled = false,
+                onClick = onToggleAdvancedActions,
+                enabled = !isDispatching
+            )
+            ComposerMenuPill(
+                title = selectedModel,
+                selected = showModelMenu,
+                onClick = { if (!isDispatching) onToggleModelMenu() },
+                modifier = Modifier.weight(1f)
+            )
+            ComposerMenuPill(
+                title = selectedReasoningEffort,
+                selected = showReasoningMenu,
+                onClick = { if (!isDispatching) onToggleReasoningMenu() }
+            )
+        }
+        if (subagentsArmed) {
+            ComposerCircleButton(
+                glyph = "✦",
+                contentDescription = "Toggle subagents",
+                filled = true,
+                onClick = onToggleSubagents,
+                enabled = !isDispatching,
+                compact = true
+            )
+        }
         if (queuePaused && queuedCount > 0) {
             ComposerCircleButton(
                 glyph = "↻",
@@ -2018,7 +2019,7 @@ private fun ComposerBottomBar(
             )
         }
         ComposerCircleButton(
-            glyph = "◉",
+            glyph = "•",
             contentDescription = "Voice draft",
             filled = false,
             onClick = onUseVoiceDraft,
@@ -2116,7 +2117,8 @@ private fun ComposerMenuPill(
     title: String,
     selected: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showChevron: Boolean = true
 ) {
     Surface(
         modifier = modifier
@@ -2141,11 +2143,13 @@ private fun ComposerMenuPill(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
-                text = "v",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (showChevron) {
+                Text(
+                    text = "v",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
