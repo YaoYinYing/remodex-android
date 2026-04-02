@@ -121,10 +121,13 @@ fun OnboardingScreen(onContinue: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
             .background(Color.Black)
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+        ) {
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier

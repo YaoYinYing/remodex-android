@@ -1,6 +1,7 @@
 package com.remodex.mobile.ui.theme
 
 import android.app.Activity
+import android.graphics.drawable.ColorDrawable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -65,8 +66,9 @@ fun RemodexTheme(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as? Activity)?.window ?: return@SideEffect
-            window.statusBarColor = (if (darkTheme) Night else Mist).toArgb()
+            window.statusBarColor = Color.Transparent.toArgb()
             window.navigationBarColor = (if (darkTheme) Night else Mist).toArgb()
+            window.setBackgroundDrawable(ColorDrawable((if (darkTheme) Night else Mist).toArgb()))
             val controller = WindowCompat.getInsetsController(window, view)
             controller.isAppearanceLightStatusBars = !darkTheme
             controller.isAppearanceLightNavigationBars = !darkTheme

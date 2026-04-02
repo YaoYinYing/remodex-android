@@ -82,11 +82,12 @@ fun PairingScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
             .background(pageGradient)
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
