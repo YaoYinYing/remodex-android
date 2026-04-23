@@ -5,11 +5,10 @@ import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,7 +22,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -33,18 +31,21 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -57,18 +58,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import com.remodex.mobile.model.ThreadSummary
 import com.remodex.mobile.model.TimelineEntry
+import com.remodex.mobile.model.TimelineRole
 import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.FileAutocompleteMatch
@@ -84,8 +86,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val MAX_COMPOSER_ATTACHMENTS = 4
-private const val SUBAGENTS_CANNED_PROMPT =
-    "Run subagents for different tasks. Delegate distinct work in parallel when helpful and then synthesize the results."
+private const val SUBAGENTS_PROMPT =
+    "Run subagents for different tasks. Delegate distinct work in parallel when helpful and synthesize the results."
 
 @Composable
 fun WorkspaceScreen(
@@ -123,154 +125,97 @@ fun WorkspaceScreen(
 ) {
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val isConnected = connectionState == ConnectionState.Connected
     val selectedThread = threads.firstOrNull { it.id == selectedThreadId && !it.isArchived }
-    val trustedPairing = service.currentPairing()
-    val normalizedProjectPath = currentProjectPath
-        .takeUnless { it == "Project path not resolved." }
-        ?.trim()
-        ?.takeIf { it.isNotEmpty() }
-    var autoRefreshEnabled by rememberSaveable { mutableStateOf(true) }
-    val queuedDrafts = remember { mutableStateListOf<QueuedComposerDraft>() }
+    val isConnected = connectionState == ConnectionState.Connected
+    val projectPath = currentProjectPath.takeUnless { it == "Project path not resolved." }.orEmpty()
+    val listState = rememberLazyListState()
+    val userMessageIndexes = remember(timeline) {
+        timeline.mapIndexedNotNull { index, entry -> index.takeIf { entry.role == TimelineRole.USER } }
+    }
+
+    val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
     val mentionedFiles = remember { mutableStateListOf<String>() }
     val mentionedSkills = remember { mutableStateListOf<SkillSuggestion>() }
+    val queuedDrafts = remember { mutableStateListOf<QueuedComposerDraft>() }
     var fileSuggestions by remember { mutableStateOf<List<FileAutocompleteMatch>>(emptyList()) }
     var skillSuggestions by remember { mutableStateOf<List<SkillSuggestion>>(emptyList()) }
-    val activeComposerToken = remember(composerInput) { detectComposerAutocompleteToken(composerInput) }
-    val commandSuggestions = remember(activeComposerToken, selectedThreadId) {
-        when (val token = activeComposerToken) {
-            is ComposerAutocompleteToken.Command -> filterComposerCommands(
-                query = token.query,
-                includeFork = !selectedThreadId.isNullOrBlank()
-            )
+    var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
+    var isDispatching by rememberSaveable(selectedThreadId) { mutableStateOf(false) }
+    var queuePaused by rememberSaveable { mutableStateOf(false) }
+    var subagentsArmed by rememberSaveable { mutableStateOf(false) }
+    var reviewTarget by rememberSaveable { mutableStateOf<ReviewTarget?>(null) }
+    var showReviewTargets by rememberSaveable { mutableStateOf(false) }
+    var showForkTargets by rememberSaveable { mutableStateOf(false) }
+    var showGitDialog by rememberSaveable { mutableStateOf(false) }
+    var showDiffDialog by rememberSaveable { mutableStateOf(false) }
+    var diffPatch by rememberSaveable { mutableStateOf("") }
+    var showCommitDialog by rememberSaveable { mutableStateOf(false) }
+    var commitMessage by rememberSaveable { mutableStateOf("") }
+
+    val activeToken = remember(composerInput) { detectComposerAutocompleteToken(composerInput) }
+    val commandSuggestions = remember(activeToken, selectedThreadId) {
+        when (val token = activeToken) {
+            is ComposerAutocompleteToken.Command -> filterComposerCommands(token.query, includeFork = !selectedThreadId.isNullOrBlank())
             else -> emptyList()
         }
     }
-    var queuePaused by rememberSaveable { mutableStateOf(false) }
-    var subagentsArmed by rememberSaveable { mutableStateOf(false) }
-    var armedReviewTarget by rememberSaveable { mutableStateOf<ReviewTarget?>(null) }
-    var showReviewTargetSuggestions by rememberSaveable { mutableStateOf(false) }
-    var showForkDestinationSuggestions by rememberSaveable { mutableStateOf(false) }
-    var steeringQueuedDraftId by rememberSaveable { mutableStateOf<String?>(null) }
-    val mediaAttachments = remember { mutableStateListOf<TurnImageAttachment>() }
-    var attachmentHint by rememberSaveable { mutableStateOf<String?>(null) }
-    var isDispatching by rememberSaveable(selectedThreadId) { mutableStateOf(false) }
-    var voiceDraftText by rememberSaveable { mutableStateOf("") }
-    var showVoiceSetupSheet by rememberSaveable { mutableStateOf(false) }
-    var showGitActionsMenu by rememberSaveable { mutableStateOf(false) }
-    var showRepositoryDiffDialog by rememberSaveable { mutableStateOf(false) }
-    var repositoryDiffPatch by rememberSaveable { mutableStateOf("") }
-    var showCommitSheet by rememberSaveable { mutableStateOf(false) }
-    var commitMessageDraft by rememberSaveable { mutableStateOf("") }
+
     val context = LocalContext.current
-    val timelineListState = rememberLazyListState()
     val galleryPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri == null) {
-            return@rememberLauncherForActivityResult
-        }
-        val loaded = runCatching {
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                val bytes = stream.readBytes()
-                val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                TurnImageAttachment(
-                    dataUrl = "data:image/jpeg;base64,$base64",
-                    label = uri.lastPathSegment ?: "gallery-image"
-                )
-            }
-        }.getOrNull()
-        if (loaded != null) {
-            if (mediaAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
-                attachmentHint = "You can attach up to $MAX_COMPOSER_ATTACHMENTS images per message."
-            } else {
-                mediaAttachments.add(loaded)
-                attachmentHint = null
-            }
-        }
-    }
-    val cameraPreviewLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
-        val payload = bitmap?.toJpegDataUrl()?.let { dataUrl ->
-            TurnImageAttachment(
-                dataUrl = dataUrl,
-                label = "camera-${System.currentTimeMillis()}.jpg"
-            )
-        }
-        if (payload != null) {
-            if (mediaAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
-                attachmentHint = "You can attach up to $MAX_COMPOSER_ATTACHMENTS images per message."
-            } else {
-                mediaAttachments.add(payload)
-                attachmentHint = null
-            }
-        }
-    }
-    val clearComposerAfterDispatch: () -> Unit = {
-        onComposerInputChange("")
-        mediaAttachments.clear()
-        voiceDraftText = ""
-        mentionedFiles.clear()
-        mentionedSkills.clear()
-        subagentsArmed = false
-        showReviewTargetSuggestions = false
-        showForkDestinationSuggestions = false
-        attachmentHint = null
-    }
-    val userMessageIndexes = remember(timeline) {
-        timeline.mapIndexedNotNull { index, item ->
-            index.takeIf { item.role == com.remodex.mobile.model.TimelineRole.USER }
-        }
-    }
-
-    LaunchedEffect(isConnected, autoRefreshEnabled) {
-        if (!isConnected || !autoRefreshEnabled) {
-            return@LaunchedEffect
-        }
-        var refreshCycle = 0
-        while (isActive) {
-            delay(3_000L)
+        val attachment = uri?.let {
             runCatching {
-                service.refreshThreads(silentStatus = true, includeTimeline = false)
-                refreshCycle += 1
-                if (refreshCycle % 3 == 0) {
-                    service.refreshActiveThreadTimeline(silentStatus = true)
+                context.contentResolver.openInputStream(it)?.use { stream ->
+                    val base64 = Base64.encodeToString(stream.readBytes(), Base64.NO_WRAP)
+                    TurnImageAttachment("data:image/jpeg;base64,$base64", it.lastPathSegment ?: "gallery-image")
                 }
-                service.refreshGitStatus(silentStatus = true)
-                service.refreshGitBranches(silentStatus = true)
-                service.refreshRateLimitInfo(silentStatus = true)
-                service.refreshPendingPermissions(silentStatus = true)
-                service.refreshModels(silentStatus = true)
-                service.refreshCiStatus(silentStatus = true)
+            }.getOrNull()
+        }
+        if (attachment != null) {
+            if (mediaAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
+                attachmentHint = "You can attach up to $MAX_COMPOSER_ATTACHMENTS images."
+            } else {
+                mediaAttachments.add(attachment)
+                attachmentHint = null
+            }
+        }
+    }
+    val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
+        val attachment = bitmap?.toJpegDataUrl()?.let { dataUrl ->
+            TurnImageAttachment(dataUrl, "camera-${System.currentTimeMillis()}.jpg")
+        }
+        if (attachment != null) {
+            if (mediaAttachments.size >= MAX_COMPOSER_ATTACHMENTS) {
+                attachmentHint = "You can attach up to $MAX_COMPOSER_ATTACHMENTS images."
+            } else {
+                mediaAttachments.add(attachment)
+                attachmentHint = null
             }
         }
     }
 
-    LaunchedEffect(activeComposerToken, selectedThreadId, currentProjectPath, threads) {
-        when (val token = activeComposerToken) {
+    LaunchedEffect(isConnected) {
+        if (!isConnected) return@LaunchedEffect
+        while (isActive) {
+            delay(4_000L)
+            runCatching { service.refreshThreads(silentStatus = true, includeTimeline = false) }
+            runCatching { service.refreshActiveThreadTimeline(silentStatus = true) }
+            runCatching { service.refreshGitStatus(silentStatus = true) }
+            runCatching { service.refreshRateLimitInfo(silentStatus = true) }
+        }
+    }
+
+    LaunchedEffect(activeToken, selectedThreadId, projectPath) {
+        when (val token = activeToken) {
             is ComposerAutocompleteToken.File -> {
-                val selectedThreadRoot = threads
-                    .firstOrNull { it.id == selectedThreadId }
-                    ?.cwd
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                val roots = listOfNotNull(selectedThreadRoot, normalizedProjectPath).distinct()
-                fileSuggestions = runCatching {
-                    service.fuzzyFileSearch(query = token.query, roots = roots, limit = 8)
-                }.getOrDefault(emptyList())
+                val roots = listOfNotNull(selectedThread?.cwd, projectPath.takeIf { it.isNotBlank() }).distinct()
+                fileSuggestions = runCatching { service.fuzzyFileSearch(token.query, roots = roots, limit = 8) }.getOrDefault(emptyList())
                 skillSuggestions = emptyList()
             }
-
             is ComposerAutocompleteToken.Skill -> {
-                val selectedThreadRoot = threads
-                    .firstOrNull { it.id == selectedThreadId }
-                    ?.cwd
-                    ?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                val roots = listOfNotNull(selectedThreadRoot, normalizedProjectPath).distinct()
-                skillSuggestions = runCatching {
-                    service.listSkills(cwds = roots, forceReload = false, limit = 8)
-                }.getOrDefault(emptyList())
+                val roots = listOfNotNull(selectedThread?.cwd, projectPath.takeIf { it.isNotBlank() }).distinct()
+                skillSuggestions = runCatching { service.listSkills(cwds = roots, forceReload = false, limit = 8) }.getOrDefault(emptyList())
                 fileSuggestions = emptyList()
             }
-
             else -> {
                 fileSuggestions = emptyList()
                 skillSuggestions = emptyList()
@@ -278,139 +223,101 @@ fun WorkspaceScreen(
         }
     }
 
-    LaunchedEffect(selectedThreadId, timeline.size, queuedDrafts.size, queuePaused) {
-        val threadId = selectedThreadId
-        if (threadId.isNullOrBlank() || queuedDrafts.isEmpty() || queuePaused) {
-            return@LaunchedEffect
-        }
-        val threadBusy = if (service.isThreadRunning(threadId)) {
-            runCatching { service.reconcileThreadRunningState(threadId) }
-                .getOrElse { true }
-        } else {
-            false
-        }
-        if (threadBusy) {
-            return@LaunchedEffect
-        }
-        val nextDraft = queuedDrafts.firstOrNull() ?: return@LaunchedEffect
-        runCatching {
-            service.sendTurnStart(
-                inputText = buildComposerPayloadText(nextDraft.text, nextDraft.subagentsArmed),
-                attachments = nextDraft.attachments,
-                skillMentions = nextDraft.skillMentions,
-                fileMentions = nextDraft.fileMentions
-            )
-        }.onSuccess {
-            queuedDrafts.removeAt(0)
-            attachmentHint = null
-        }.onFailure { error ->
-            queuePaused = true
-            attachmentHint = "Queue paused: ${error.message ?: "Failed to send queued draft."}"
-        }
-    }
-
-    LaunchedEffect(selectedThreadId, timeline.size) {
+    LaunchedEffect(timeline.size, selectedThreadId) {
         if (timeline.isNotEmpty()) {
-            timelineListState.animateScrollToItem(timeline.lastIndex)
+            listState.animateScrollToItem(timeline.lastIndex)
         }
     }
 
-    LaunchedEffect(composerInput, mentionedFiles.size, mentionedSkills.size, mediaAttachments.size, subagentsArmed) {
-        val hasConflictingDraftContent = composerInput.trim().isNotEmpty()
-            || mentionedFiles.isNotEmpty()
-            || mentionedSkills.isNotEmpty()
-            || mediaAttachments.isNotEmpty()
-            || subagentsArmed
-        if (armedReviewTarget != null && hasConflictingDraftContent) {
-            armedReviewTarget = null
-        }
-        if (hasConflictingDraftContent) {
-            showForkDestinationSuggestions = false
-        }
+    fun clearComposer() {
+        onComposerInputChange("")
+        mediaAttachments.clear()
+        mentionedFiles.clear()
+        mentionedSkills.clear()
+        attachmentHint = null
+        subagentsArmed = false
+        reviewTarget = null
+        showReviewTargets = false
+        showForkTargets = false
     }
 
-    val pageGradient = Brush.verticalGradient(
-        colors = listOf(
-            MaterialTheme.colorScheme.background,
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-            MaterialTheme.colorScheme.background
-        )
+    fun normalizedInput(): String = buildComposerPayloadText(
+        input = composerInput,
+        mentionedFiles = mentionedFiles,
+        mentionedSkills = mentionedSkills,
+        subagentsArmed = subagentsArmed,
+        armedReviewTarget = reviewTarget
     )
+
+    fun dispatchMessage() {
+        if (isDispatching) return
+        val text = normalizedInput()
+        if (text.isBlank() && mediaAttachments.isEmpty()) return
+        if (selectedThreadId == null || queuePaused) {
+            queuedDrafts.add(QueuedComposerDraft(text = text, attachments = mediaAttachments.toList()))
+            clearComposer()
+            return
+        }
+        isDispatching = true
+        scope.launch {
+            runCatching { service.sendTurnStart(text, attachments = mediaAttachments.toList()) }
+            clearComposer()
+            isDispatching = false
+        }
+    }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
-        gesturesEnabled = true,
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(
+                modifier = Modifier.width(330.dp),
+                drawerContainerColor = MaterialTheme.colorScheme.background
+            ) {
                 SidebarDrawerContent(
                     threads = threads,
                     selectedThreadId = selectedThreadId,
                     currentProjectPath = currentProjectPath,
                     onOpenThread = { threadId ->
                         scope.launch {
+                            drawerState.close()
                             runCatching { service.openThread(threadId) }
-                            runCatching { drawerState.close() }
                         }
                     },
-                    onStartThread = { projectPath ->
+                    onStartThread = { projectHint ->
                         scope.launch {
-                            runCatching { service.startThread(preferredProjectPath = projectPath) }
-                            runCatching { drawerState.close() }
+                            drawerState.close()
+                            runCatching { service.startThread(preferredProjectPath = projectHint) }
                         }
                     },
                     rateLimitInfo = rateLimitInfo,
                     ciStatus = ciStatus,
-                    autoRefreshEnabled = autoRefreshEnabled,
-                    onAutoRefreshChanged = { autoRefreshEnabled = it },
-                    onRefreshWorkspace = {
-                        scope.launch {
-                            runCatching { service.forceRefreshWorkspace() }
-                        }
-                    },
+                    autoRefreshEnabled = isConnected,
+                    onAutoRefreshChanged = { _ -> },
+                    onRefreshWorkspace = { scope.launch { service.forceRefreshWorkspace() } },
                     onOpenSettings = {
-                        scope.launch { runCatching { drawerState.close() } }
+                        scope.launch { drawerState.close() }
                         onOpenSettings()
                     },
                     onGitDiff = {
                         scope.launch {
-                            runCatching { service.gitDiff() }
-                                .onSuccess { patch ->
-                                    repositoryDiffPatch = patch
-                                    showRepositoryDiffDialog = true
-                                }
+                            diffPatch = runCatching { service.gitDiff() }.getOrElse { it.message ?: "Diff unavailable." }
+                            showDiffDialog = true
                         }
                     },
-                    onGitCommit = {
-                        showCommitSheet = true
-                    },
-                    onGitCommitAndPush = {
-                        commitMessageDraft = ""
-                        showCommitSheet = true
-                    },
-                    onGitPull = {
-                        scope.launch { runCatching { service.gitPull() } }
-                    },
-                    onGitPush = {
-                        scope.launch { runCatching { service.gitPush() } }
-                    },
-                    onRenameThread = { threadId, name ->
-                        scope.launch { runCatching { service.renameThread(threadId, name) } }
-                    },
-                    onArchiveThread = { threadId ->
-                        scope.launch { runCatching { service.archiveThread(threadId) } }
-                    },
-                    onUnarchiveThread = { threadId ->
-                        scope.launch { runCatching { service.unarchiveThread(threadId) } }
-                    },
-                    onDeleteThreadLocally = { threadId ->
-                        scope.launch { runCatching { service.deleteThreadLocally(threadId) } }
-                    },
-                    onArchiveProjectGroup = { threadIds ->
-                        scope.launch { runCatching { service.archiveThreadGroup(threadIds) } }
-                    },
+                    onGitCommit = { showCommitDialog = true },
+                    onGitCommitAndPush = { scope.launch { service.gitCommitAndPush(null) } },
+                    onGitPull = { scope.launch { service.gitPull() } },
+                    onGitPush = { scope.launch { service.gitPush() } },
+                    onArchiveThread = { threadId -> scope.launch { service.archiveThread(threadId) } },
+                    onUnarchiveThread = { threadId -> scope.launch { service.unarchiveThread(threadId) } },
+                    onDeleteThreadLocally = { threadId -> scope.launch { service.deleteThreadLocally(threadId) } },
+                    onArchiveProjectGroup = { ids -> scope.launch { service.archiveThreadGroup(ids) } },
+                    onRenameThread = { threadId, title -> scope.launch { service.renameThread(threadId, title) } },
                     onDisconnect = {
-                        scope.launch { runCatching { service.disconnect() } }
-                        onOpenPairing()
+                        scope.launch {
+                            service.disconnect()
+                            onOpenPairing()
+                        }
                     }
                 )
             }
@@ -419,910 +326,307 @@ fun WorkspaceScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(pageGradient)
+                .background(MaterialTheme.colorScheme.background)
+                .statusBarsPadding()
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
-                Spacer(modifier = Modifier.statusBarsPadding())
-                WorkspaceTopBar(
-                    status = status,
-                    selectedThreadTitle = selectedThread?.displayTitle,
-                    currentProjectPath = normalizedProjectPath,
-                    gitStatusSummary = gitStatusSummary,
-                    checkoutBranch = checkoutBranch,
-                    hasPendingPermissions = pendingPermissions.isNotEmpty(),
-                    onMenu = {
-                        scope.launch { drawerState.open() }
-                    },
-                    onRefresh = {
-                        scope.launch { runCatching { service.forceRefreshWorkspace() } }
-                    },
-                    onShowRepositoryDiff = {
-                        scope.launch {
-                            runCatching { service.gitDiff() }
-                                .onSuccess { patch ->
-                                    repositoryDiffPatch = patch
-                                    showRepositoryDiffDialog = true
-                                }
-                        }
-                    },
-                    onOpenGitActions = { showGitActionsMenu = true },
-                    onTap = onHeaderTap
+                WorkspacePrincipalHeader(
+                    title = selectedThread?.displayTitle ?: "Remodex",
+                    subtitle = selectedThread?.cwd ?: projectPath.ifBlank { status },
+                    connectionState = connectionState,
+                    onOpenSidebar = { scope.launch { drawerState.open() } },
+                    onRefresh = { scope.launch { service.forceRefreshWorkspace() } },
+                    onOpenSettings = onOpenSettings,
+                    onHeaderTap = onHeaderTap
                 )
 
-                if (selectedThread == null) {
+                if (selectedThreadId == null) {
                     EmptyWorkspaceHome(
                         connectionState = connectionState,
                         status = status,
-                        trustedPairLabel = trustedPairing?.let { pairing ->
-                            "Trusted Mac: ${pairing.macDeviceId} · ${pairing.relayUrl}"
-                        },
-                        projectPath = normalizedProjectPath,
+                        trustedPairLabel = service.currentPairing()?.macDeviceId,
+                        projectPath = projectPath.takeIf { it.isNotBlank() },
                         rateLimitInfo = rateLimitInfo,
                         ciStatus = ciStatus,
-                        onOpenSidebar = {
-                            scope.launch { drawerState.open() }
-                        },
+                        onOpenSidebar = { scope.launch { drawerState.open() } },
                         onOpenPairing = onOpenPairing,
-                        onReconnect = {
+                        onReconnect = { scope.launch { service.reconnect() } },
+                        onForgetPair = {
                             scope.launch {
-                                runCatching { service.connectLive() }
+                                service.disconnect()
+                                onOpenPairing()
                             }
                         },
-                        onForgetPair = { service.forgetPairing() },
-                        onStartThread = {
-                            scope.launch {
-                                runCatching { service.startThread(preferredProjectPath = normalizedProjectPath) }
-                            }
-                        }
+                        onStartThread = { scope.launch { service.startThread() } }
                     )
                 } else {
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    WorkspaceStatusStrip(
+                        projectPath = projectPath.ifBlank { selectedThread?.cwd.orEmpty() },
+                        gitStatusSummary = gitActionStatus ?: gitStatusSummary,
+                        rateLimitInfo = rateLimitInfo,
+                        ciStatus = ciStatus,
+                        branch = checkoutBranch,
+                        onOpenGit = { showGitDialog = true },
+                        onCheckRateLimits = { scope.launch { service.refreshRateLimitInfo(silentStatus = false) } }
+                    )
+
+                    PendingPermissionStrip(
+                        pendingPermissions = pendingPermissions,
+                        onGrant = { id -> scope.launch { service.grantPermission(id, allow = true) } },
+                        onDeny = { id -> scope.launch { service.grantPermission(id, allow = false) } }
+                    )
+
+                    voiceRecoverySnapshot?.let { snapshot ->
+                        RecoveryAccessoryCard(snapshot, onVoiceRecoveryAction, onDismissVoiceRecovery)
+                    }
+
+                    Box(modifier = Modifier.weight(1f)) {
                         LazyColumn(
-                            state = timelineListState,
+                            state = listState,
                             modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 276.dp),
-                            verticalArrangement = Arrangement.spacedBy(20.dp)
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            if (pendingPermissions.isNotEmpty()) {
-                                item {
-                                    InlineStatusCard(
-                                        title = "Approval request",
-                                        body = "${pendingPermissions.size} action${if (pendingPermissions.size == 1) "" else "s"} waiting for approval.",
-                                        accent = Color(0xFFE6A23C)
-                                    )
-                                }
-                                items(pendingPermissions, key = { it.id }) { request ->
-                                    PermissionRow(
-                                        request = request,
-                                        onAllow = {
-                                            scope.launch { runCatching { service.grantPermission(request.id, allow = true) } }
-                                        },
-                                        onDeny = {
-                                            scope.launch { runCatching { service.grantPermission(request.id, allow = false) } }
-                                        }
-                                    )
-                                }
-                            }
-
-                            item {
-                                ConversationMetaRow(
-                                    projectPath = normalizedProjectPath ?: "No repo bound yet",
-                                    gitStatusSummary = gitStatusSummary,
-                                    gitActionStatus = gitActionStatus,
-                                    rateLimitInfo = rateLimitInfo,
-                                    ciStatus = ciStatus,
-                                    branches = gitBranches,
-                                    selectedBranch = checkoutBranch,
-                                    onBranchSelected = onCheckoutBranchChange,
-                                    onPull = { scope.launch { runCatching { service.gitPull() } } },
-                                    onPush = { scope.launch { runCatching { service.gitPush() } } }
-                                )
-                            }
-
-                            if (voiceRecoverySnapshot != null) {
-                                item {
-                                    RecoveryAccessoryCard(
-                                        snapshot = voiceRecoverySnapshot,
-                                        onAction = {
-                                            if (voiceRecoverySnapshot.actionLabel == "How To Fix") {
-                                                showVoiceSetupSheet = true
-                                            } else {
-                                                onVoiceRecoveryAction()
-                                            }
-                                        },
-                                        onDismiss = onDismissVoiceRecovery
-                                    )
-                                }
-                            }
-
-                            if (timeline.isEmpty() && voiceRecoverySnapshot == null) {
-                                item {
-                                    InlineStatusCard(
-                                        title = "Conversation",
-                                        body = "This chat is ready. Start with a prompt, mention files, or attach an image.",
-                                        accent = MaterialTheme.colorScheme.primary
-                                    )
-                                }
+                            if (timeline.isEmpty()) {
+                                item { EmptyTimelineHint(status = status) }
                             } else {
-                                items(timeline, key = { it.id }) { entry ->
-                                    TimelineRow(item = entry)
-                                }
+                                items(timeline, key = { it.id }) { entry -> TimelineRow(entry) }
                             }
                         }
-
-                        ComposerDock(
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .fillMaxWidth(),
-                            selectedModel = selectedModel,
-                            availableModels = availableModels,
-                            selectedReasoningEffort = selectedReasoningEffort,
-                            availableReasoningEfforts = availableReasoningEfforts,
-                            selectedBranch = checkoutBranch,
-                            rateLimitInfo = rateLimitInfo,
-                            ciStatus = ciStatus,
-                            selectedThreadId = selectedThreadId,
-                            composerInput = composerInput,
-                            onComposerInputChange = onComposerInputChange,
-                            dockCollapsedSide = dockCollapsedSide,
-                            voiceDraftText = voiceDraftText,
-                            onVoiceDraftTextChange = { voiceDraftText = it },
-                            mediaAttachments = mediaAttachments,
-                            attachmentHint = attachmentHint,
-                            subagentsArmed = subagentsArmed,
-                            armedReviewTarget = armedReviewTarget,
-                            showReviewTargetSuggestions = showReviewTargetSuggestions,
-                            showForkDestinationSuggestions = showForkDestinationSuggestions,
-                            mentionedFiles = mentionedFiles,
-                            mentionedSkills = mentionedSkills,
-                            activeComposerToken = activeComposerToken,
-                            fileSuggestions = fileSuggestions,
-                            skillSuggestions = skillSuggestions,
-                            commandSuggestions = commandSuggestions,
-                            queuedDrafts = queuedDrafts,
-                            queuePaused = queuePaused,
-                            steeringQueuedDraftId = steeringQueuedDraftId,
-                            isRunning = service.isThreadRunning(selectedThreadId),
-                            isDispatching = isDispatching,
-                            onQueuePausedChange = { queuePaused = it },
-                            onAttachGallery = { galleryPicker.launch("image/*") },
-                            onAttachCamera = { cameraPreviewLauncher.launch(null) },
-                            onUseVoiceDraft = {
-                                val line = voiceDraftText.trim()
-                                if (line.isNotEmpty()) {
-                                    onComposerInputChange(
-                                        listOf(composerInput.trim(), line)
-                                            .filter { it.isNotEmpty() }
-                                            .joinToString("\n")
-                                    )
-                                    voiceDraftText = ""
-                                } else {
-                                    onTriggerVoiceRecovery()
-                                }
-                            },
-                            onCheckRateLimits = {
-                                scope.launch {
-                                    runCatching {
-                                        service.refreshRateLimitInfo(silentStatus = false)
-                                    }.onFailure {
-                                        attachmentHint = it.message ?: "Failed to refresh rate limits."
-                                    }
-                                }
-                            },
-                            onSwitchModel = onSwitchModel,
-                            onSwitchReasoningEffort = onSwitchReasoningEffort,
-                            onRemoveAttachment = { attachment ->
-                                mediaAttachments.remove(attachment)
-                                if (mediaAttachments.size < MAX_COMPOSER_ATTACHMENTS) {
-                                    attachmentHint = null
-                                }
-                            },
-                            onToggleSubagentsArmed = { subagentsArmed = !subagentsArmed },
-                            onClearSubagentsArmed = { subagentsArmed = false },
-                            onClearReviewTarget = { armedReviewTarget = null },
-                            onRemoveMentionedFile = { mention -> mentionedFiles.remove(mention) },
-                            onRemoveMentionedSkill = { skill -> mentionedSkills.remove(skill) },
-                            onSelectFileSuggestion = { token, match ->
-                                onComposerInputChange(
-                                    applyComposerAutocompleteSelection(
-                                        originalInput = composerInput,
-                                        token = token,
-                                        replacement = "@${match.fileName}"
-                                    )
-                                )
-                                if (!mentionedFiles.contains(match.path)) {
-                                    mentionedFiles.add(match.path)
-                                }
-                            },
-                            onSelectSkillSuggestion = { token, skill ->
-                                onComposerInputChange(
-                                    applyComposerAutocompleteSelection(
-                                        originalInput = composerInput,
-                                        token = token,
-                                        replacement = "\$${skill.name}"
-                                    )
-                                )
-                                if (mentionedSkills.none { it.id == skill.id }) {
-                                    mentionedSkills.add(skill)
-                                }
-                            },
-                            onSelectCommandSuggestion = { command ->
-                                when (command.token) {
-                                    "/status" -> {
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        scope.launch {
-                                            runCatching { service.forceRefreshWorkspace() }
-                                            runCatching { service.refreshThreads(includeTimeline = false) }
-                                            runCatching { service.refreshActiveThreadTimeline() }
-                                            runCatching { service.refreshGitStatus() }
-                                        }
-                                    }
-
-                                    "/new" -> {
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        scope.launch {
-                                            runCatching { service.startThread(preferredProjectPath = normalizedProjectPath) }
-                                        }
-                                    }
-
-                                    "/refresh" -> {
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        scope.launch { runCatching { service.forceRefreshWorkspace() } }
-                                    }
-
-                                    "/resume" -> {
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        scope.launch {
-                                            runCatching { service.threadResume(selectedThreadId) }
-                                        }
-                                    }
-
-                                    "/fork" -> {
-                                        showReviewTargetSuggestions = false
-                                        if (selectedThreadId != null && service.isThreadRunning(selectedThreadId)) {
-                                            showForkDestinationSuggestions = false
-                                            attachmentHint = "Wait for the current response to finish before forking."
-                                        } else {
-                                            attachmentHint = null
-                                            onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
-                                            showForkDestinationSuggestions = true
-                                        }
-                                    }
-
-                                    "/review" -> {
-                                        onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
-                                        showReviewTargetSuggestions = true
-                                        showForkDestinationSuggestions = false
-                                    }
-
-                                    "/subagents" -> {
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        armedReviewTarget = null
-                                        onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
-                                        subagentsArmed = true
-                                    }
-
-                                    "/steer" -> {
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        val steerInput = composerInput
-                                            .removePrefix("/steer")
-                                            .trim()
-                                        if (steerInput.isNotEmpty()) {
-                                            scope.launch {
-                                                runCatching { service.turnSteer(steerInput) }
-                                            }
-                                            onComposerInputChange("")
-                                        } else {
-                                            onComposerInputChange("/steer ")
-                                        }
-                                    }
-
-                                    else -> {
-                                        showReviewTargetSuggestions = false
-                                        showForkDestinationSuggestions = false
-                                        onComposerInputChange(
-                                            "Help: use @files, \$skills, /status, /new, /refresh, /resume, /fork, /review, /subagents, /steer."
-                                        )
-                                    }
-                                }
-                                fileSuggestions = emptyList()
-                                skillSuggestions = emptyList()
-                            },
-                            onRestoreQueuedDraft = { draftId ->
-                                val index = queuedDrafts.indexOfFirst { it.id == draftId }
-                                if (index < 0) {
-                                    return@ComposerDock
-                                }
-                                val restored = queuedDrafts.removeAt(index)
-                                onComposerInputChange(restored.text)
-                                subagentsArmed = restored.subagentsArmed
-                                armedReviewTarget = null
-                                showReviewTargetSuggestions = false
-                                showForkDestinationSuggestions = false
-                                mentionedFiles.clear()
-                                mentionedFiles.addAll(restored.fileMentions)
-                                mentionedSkills.clear()
-                                mentionedSkills.addAll(restored.skillMentions)
-                                mediaAttachments.clear()
-                                mediaAttachments.addAll(restored.attachments)
-                            },
-                            onSteerQueuedDraft = { draftId ->
-                                val index = queuedDrafts.indexOfFirst { it.id == draftId }
-                                if (index < 0 || selectedThreadId.isNullOrBlank()) {
-                                    return@ComposerDock
-                                }
-                                val draft = queuedDrafts[index]
-                                steeringQueuedDraftId = draftId
-                                scope.launch {
-                                    runCatching {
-                                        service.turnSteer(buildComposerPayloadText(draft.text, draft.subagentsArmed))
-                                    }.onSuccess {
-                                        queuedDrafts.removeAll { it.id == draftId }
-                                        attachmentHint = null
-                                    }.onFailure {
-                                        attachmentHint = it.message ?: "Failed to steer queued draft."
-                                    }.also {
-                                        steeringQueuedDraftId = null
-                                    }
-                                }
-                            },
-                            onRemoveQueuedDraft = { draftId ->
-                                queuedDrafts.removeAll { it.id == draftId }
-                                if (steeringQueuedDraftId == draftId) {
-                                    steeringQueuedDraftId = null
-                                }
-                            },
-                            onClearQueue = {
-                                queuedDrafts.clear()
-                                steeringQueuedDraftId = null
-                            },
-                            onSelectReviewTargetSuggestion = { target ->
-                                val hasConflictingDraftContent = composerInput.trim().isNotEmpty()
-                                    || mentionedFiles.isNotEmpty()
-                                    || mentionedSkills.isNotEmpty()
-                                    || mediaAttachments.isNotEmpty()
-                                    || subagentsArmed
-                                if (hasConflictingDraftContent) {
-                                    attachmentHint = "Review mode requires an empty draft with no mentions, attachments, or /subagents."
-                                    showReviewTargetSuggestions = false
-                                    showForkDestinationSuggestions = false
-                                } else {
-                                    attachmentHint = null
-                                    armedReviewTarget = target
-                                    showReviewTargetSuggestions = false
-                                    showForkDestinationSuggestions = false
-                                    onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
-                                }
-                            },
-                            onDismissReviewTargetSuggestions = {
-                                showReviewTargetSuggestions = false
-                                showForkDestinationSuggestions = false
-                            },
-                            onSelectForkDestinationLocal = {
-                                showForkDestinationSuggestions = false
-                                scope.launch {
-                                    runCatching { service.threadFork(selectedThreadId) }
-                                }
-                            },
-                            onSelectForkDestinationNewWorktree = {
-                                showForkDestinationSuggestions = false
-                                val normalizedBaseBranch = checkoutBranch.trim()
-                                if (normalizedBaseBranch.isEmpty()) {
-                                    attachmentHint = "Pick a base branch before creating a worktree fork."
-                                    return@ComposerDock
-                                }
-                                val generatedBranch = "android-fork-${System.currentTimeMillis().toString(16)}"
-                                scope.launch {
-                                    runCatching {
-                                        val worktreePath = service.gitCreateWorktree(
-                                            name = generatedBranch,
-                                            baseBranch = normalizedBaseBranch,
-                                            changeTransfer = "copy"
-                                        )
-                                        service.threadFork(
-                                            threadId = selectedThreadId,
-                                            targetProjectPath = worktreePath
-                                        )
-                                    }.onSuccess {
-                                        attachmentHint = null
-                                    }.onFailure {
-                                        attachmentHint = it.message ?: "Failed to create worktree fork."
-                                    }
-                                }
-                            },
-                            onDismissForkDestinationSuggestions = {
-                                showForkDestinationSuggestions = false
-                            },
-                            onSend = {
-                                if (isDispatching) {
-                                    return@ComposerDock
-                                }
-                                val selectedReviewTarget = armedReviewTarget
-                                val trimmed = composerInput.trim()
-                                if (selectedReviewTarget == null && trimmed.isEmpty() && mediaAttachments.isEmpty() && !subagentsArmed) {
-                                    return@ComposerDock
-                                }
-                                isDispatching = true
-                                scope.launch {
-                                    try {
-                                        val activeThreadId = selectedThreadId
-                                        val threadBusy = if (!activeThreadId.isNullOrBlank() && service.isThreadRunning(activeThreadId)) {
-                                            runCatching { service.reconcileThreadRunningState(activeThreadId) }
-                                                .getOrElse { true }
-                                        } else {
-                                            false
-                                        }
-
-                                        if (selectedReviewTarget != null) {
-                                            if (threadBusy) {
-                                                attachmentHint = "Wait for the current response to finish before starting a review."
-                                                return@launch
-                                            }
-                                            runCatching {
-                                                service.reviewStart(
-                                                    threadId = activeThreadId,
-                                                    target = selectedReviewTarget,
-                                                    baseBranch = checkoutBranch.trim().takeIf { it.isNotEmpty() }
-                                                )
-                                            }.onSuccess {
-                                                armedReviewTarget = null
-                                                clearComposerAfterDispatch()
-                                            }.onFailure {
-                                                attachmentHint = it.message ?: "Failed to start review."
-                                            }
-                                            return@launch
-                                        }
-
-                                        if (threadBusy) {
-                                            queuedDrafts.add(
-                                                QueuedComposerDraft(
-                                                    id = "draft-${System.currentTimeMillis()}-${queuedDrafts.size}",
-                                                    text = trimmed,
-                                                    subagentsArmed = subagentsArmed,
-                                                    fileMentions = mentionedFiles.toList(),
-                                                    skillMentions = mentionedSkills.toList(),
-                                                    attachments = mediaAttachments.toList()
-                                                )
-                                            )
-                                            clearComposerAfterDispatch()
-                                            return@launch
-                                        }
-
-                                        runCatching {
-                                            service.sendTurnStart(
-                                                inputText = buildComposerPayloadText(trimmed, subagentsArmed),
-                                                attachments = mediaAttachments.toList(),
-                                                skillMentions = mentionedSkills.toList(),
-                                                fileMentions = mentionedFiles.toList()
-                                            )
-                                        }.onSuccess {
-                                            clearComposerAfterDispatch()
-                                        }.onFailure {
-                                            attachmentHint = it.message ?: "Failed to send message."
-                                        }
-                                    } finally {
-                                        isDispatching = false
-                                    }
-                                }
-                            },
-                            onStop = {
-                                showReviewTargetSuggestions = false
-                                showForkDestinationSuggestions = false
-                                scope.launch { runCatching { service.interruptActiveTurn() } }
-                            }
+                        TimelineScrubber(
+                            indexes = userMessageIndexes,
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                            onJumpToIndex = { index -> scope.launch { listState.animateScrollToItem(index) } }
                         )
-                        if (userMessageIndexes.size > 1) {
-                            TimelineScrubber(
-                                modifier = Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .padding(end = 6.dp, bottom = 144.dp),
-                                count = userMessageIndexes.size,
-                                onPositionChanged = { normalized ->
-                                    val target = userMessageIndexes[
-                                        (normalized * userMessageIndexes.lastIndex)
-                                            .toInt()
-                                            .coerceIn(0, userMessageIndexes.lastIndex)
-                                    ]
-                                    scope.launch { timelineListState.scrollToItem(target) }
-                                }
-                            )
-                        }
-
-                        if (showVoiceSetupSheet) {
-                            VoiceSetupHelpDialog(
-                                onDismiss = { showVoiceSetupSheet = false }
-                            )
-                        }
-
-                        if (showGitActionsMenu) {
-                            GitActionsDialog(
-                                selectedBranch = checkoutBranch,
-                                onDismiss = { showGitActionsMenu = false },
-                                onShowDiff = {
-                                    showGitActionsMenu = false
-                                    scope.launch {
-                                        runCatching { service.gitDiff() }
-                                            .onSuccess { patch ->
-                                                repositoryDiffPatch = patch
-                                                showRepositoryDiffDialog = true
-                                            }
-                                    }
-                                },
-                                onPull = {
-                                    showGitActionsMenu = false
-                                    scope.launch { runCatching { service.gitPull() } }
-                                },
-                                onPush = {
-                                    showGitActionsMenu = false
-                                    scope.launch { runCatching { service.gitPush() } }
-                                },
-                                onCommit = {
-                                    showGitActionsMenu = false
-                                    showCommitSheet = true
-                                },
-                                onCommitAndPush = {
-                                    showGitActionsMenu = false
-                                    showCommitSheet = true
-                                }
-                            )
-                        }
-
-                        if (showRepositoryDiffDialog) {
-                            DiffPreviewDialog(
-                                title = "Repository Changes",
-                                rawPatch = repositoryDiffPatch,
-                                onDismiss = { showRepositoryDiffDialog = false }
-                            )
-                        }
-
-                        if (showCommitSheet) {
-                            CommitComposerDialog(
-                                message = commitMessageDraft,
-                                onMessageChange = { commitMessageDraft = it },
-                                onDismiss = {
-                                    showCommitSheet = false
-                                    commitMessageDraft = ""
-                                },
-                                onCommit = {
-                                    val message = commitMessageDraft
-                                    showCommitSheet = false
-                                    commitMessageDraft = ""
-                                    scope.launch { runCatching { service.gitCommit(message) } }
-                                },
-                                onCommitAndPush = {
-                                    val message = commitMessageDraft
-                                    showCommitSheet = false
-                                    commitMessageDraft = ""
-                                    scope.launch { runCatching { service.gitCommitAndPush(message) } }
-                                }
-                            )
-                        }
                     }
                 }
             }
+
+            ComposerDock(
+                modifier = Modifier.align(Alignment.BottomCenter),
+                selectedModel = selectedModel,
+                availableModels = availableModels,
+                selectedReasoningEffort = selectedReasoningEffort,
+                availableReasoningEfforts = availableReasoningEfforts,
+                composerInput = composerInput,
+                onComposerInputChange = onComposerInputChange,
+                dockCollapsedSide = dockCollapsedSide,
+                mediaAttachments = mediaAttachments,
+                mentionedFiles = mentionedFiles,
+                mentionedSkills = mentionedSkills,
+                attachmentHint = attachmentHint,
+                activeToken = activeToken,
+                fileSuggestions = fileSuggestions,
+                skillSuggestions = skillSuggestions,
+                commandSuggestions = commandSuggestions,
+                queuedDrafts = queuedDrafts,
+                queuePaused = queuePaused,
+                subagentsArmed = subagentsArmed,
+                reviewTarget = reviewTarget,
+                showReviewTargets = showReviewTargets,
+                showForkTargets = showForkTargets,
+                isDispatching = isDispatching,
+                isRunning = selectedThreadId != null && timeline.lastOrNull()?.turnId != null,
+                onQueuePausedChange = { queuePaused = it },
+                onSwitchModel = onSwitchModel,
+                onSwitchReasoningEffort = onSwitchReasoningEffort,
+                onAttachGallery = { galleryPicker.launch("image/*") },
+                onAttachCamera = { cameraLauncher.launch(null) },
+                onVoice = onTriggerVoiceRecovery,
+                onCheckRateLimits = { scope.launch { service.refreshRateLimitInfo(silentStatus = false) } },
+                onSelectFile = { token, match ->
+                    onComposerInputChange(applyComposerAutocompleteSelection(composerInput, token, match.path))
+                    mentionedFiles.add(match.path)
+                },
+                onSelectSkill = { token, skill ->
+                    onComposerInputChange(applyComposerAutocompleteSelection(composerInput, token, skill.name))
+                    mentionedSkills.add(skill)
+                },
+                onSelectCommand = { command ->
+                    when (command.token) {
+                        "/status" -> scope.launch { service.forceRefreshWorkspace() }
+                        "/subagents" -> subagentsArmed = true
+                        "/review" -> showReviewTargets = true
+                        "/fork" -> showForkTargets = true
+                    }
+                    onComposerInputChange(stripTrailingSlashCommandToken(composerInput))
+                },
+                onRemoveAttachment = { mediaAttachments.remove(it) },
+                onRemoveMentionedFile = { mentionedFiles.remove(it) },
+                onRemoveMentionedSkill = { mentionedSkills.remove(it) },
+                onToggleSubagents = { subagentsArmed = !subagentsArmed },
+                onSelectReviewTarget = {
+                    reviewTarget = it
+                    showReviewTargets = false
+                },
+                onDismissReviewTargets = { showReviewTargets = false },
+                onForkLocal = {
+                    showForkTargets = false
+                    scope.launch { service.threadFork() }
+                },
+                onForkWorktree = {
+                    showForkTargets = false
+                    scope.launch {
+                        service.threadFork(
+                            targetProjectPath = selectedThread?.cwd?.takeIf { it.isNotBlank() } ?: projectPath.takeIf { it.isNotBlank() }
+                        )
+                    }
+                },
+                onDismissForkTargets = { showForkTargets = false },
+                onRestoreQueuedDraft = { draft ->
+                    onComposerInputChange(draft.text)
+                    queuedDrafts.remove(draft)
+                },
+                onRemoveQueuedDraft = { queuedDrafts.remove(it) },
+                onClearQueue = { queuedDrafts.clear() },
+                onSend = { dispatchMessage() },
+                onStop = { scope.launch { service.interruptActiveTurn() } }
+            )
         }
     }
 
+    if (showGitDialog) {
+        GitActionsDialog(
+            branches = gitBranches,
+            selectedBranch = checkoutBranch,
+            gitStatusSummary = gitActionStatus ?: gitStatusSummary,
+            onBranchSelected = { branch ->
+                onCheckoutBranchChange(branch)
+                scope.launch { service.checkoutGitBranch(branch) }
+            },
+            onPull = { scope.launch { service.gitPull() } },
+            onPush = { scope.launch { service.gitPush() } },
+            onCommit = { showCommitDialog = true },
+            onDiff = {
+                scope.launch {
+                    diffPatch = runCatching { service.gitDiff() }.getOrElse { it.message ?: "Diff unavailable." }
+                    showDiffDialog = true
+                }
+            },
+            onDismiss = { showGitDialog = false }
+        )
+    }
+    if (showDiffDialog) {
+        TextPreviewDialog(title = "File Changes", body = diffPatch, onDismiss = { showDiffDialog = false })
+    }
+    if (showCommitDialog) {
+        CommitDialog(
+            value = commitMessage,
+            onValueChange = { commitMessage = it },
+            onDismiss = { showCommitDialog = false },
+            onCommit = {
+                scope.launch {
+                    service.gitCommitAndPush(commitMessage.takeIf { it.isNotBlank() })
+                    commitMessage = ""
+                    showCommitDialog = false
+                }
+            }
+        )
+    }
 }
 
 @Composable
-private fun VoiceSetupHelpDialog(
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Use ChatGPT on Mac") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("1. Open ChatGPT on your Mac.")
-                Text("2. Sign in there with the account you want for voice mode.")
-                Text("3. Keep the bridge connected and come back to Remodex.")
-                Text(
-                    text = "You do not need to start ChatGPT login from Android.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = onDismiss) {
-                Text("Close")
-            }
-        }
-    )
-}
-
-@Composable
-private fun WorkspaceTopBar(
-    status: String,
-    selectedThreadTitle: String?,
-    currentProjectPath: String?,
-    gitStatusSummary: String,
-    checkoutBranch: String,
-    hasPendingPermissions: Boolean,
-    onMenu: () -> Unit,
+private fun WorkspacePrincipalHeader(
+    title: String,
+    subtitle: String,
+    connectionState: ConnectionState,
+    onOpenSidebar: () -> Unit,
     onRefresh: () -> Unit,
-    onShowRepositoryDiff: () -> Unit,
-    onOpenGitActions: () -> Unit,
-    onTap: () -> Unit
+    onOpenSettings: () -> Unit,
+    onHeaderTap: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        CompactToolbarButton(label = "☰", compact = true, onClick = onOpenSidebar)
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(14.dp))
+                .clickable(onClick = onHeaderTap),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center
+            )
+        }
+        StatusDot(connectionState)
+        CompactToolbarButton(label = "↻", compact = true, onClick = onRefresh)
+        CompactToolbarButton(label = "⚙", compact = true, onClick = onOpenSettings)
+    }
+}
+
+@Composable
+private fun StatusDot(connectionState: ConnectionState) {
+    val color = when (connectionState) {
+        ConnectionState.Connected -> Color(0xFF34C759)
+        ConnectionState.Connecting -> Color(0xFFFFCC00)
+        is ConnectionState.Failed -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.outline
+    }
+    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(color))
+}
+
+@Composable
+private fun WorkspaceStatusStrip(
+    projectPath: String,
+    gitStatusSummary: String,
+    rateLimitInfo: String,
+    ciStatus: String,
+    branch: String,
+    onOpenGit: () -> Unit,
+    onCheckRateLimits: () -> Unit
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp).fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
         tonalElevation = 1.dp
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                CompactToolbarButton(label = "≡", onClick = onMenu, compact = true)
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .padding(horizontal = 2.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .clickable(onClick = onTap),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        text = selectedThreadTitle ?: "Remodex",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = when {
-                            selectedThreadTitle == null -> status
-                            !currentProjectPath.isNullOrBlank() -> currentProjectPath
-                            else -> gitStatusSummary
-                        },
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (selectedThreadTitle != null) {
-                        StatusPill(
-                            text = checkoutBranch.ifBlank { "chat" }.take(10),
-                            accent = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    CompactToolbarButton(label = "∆", onClick = onShowRepositoryDiff, compact = true)
-                    CompactToolbarButton(label = "⋯", onClick = onOpenGitActions, compact = true)
-                    CompactToolbarButton(label = "↻", onClick = onRefresh, compact = true)
-                }
-            }
-
-            if (hasPendingPermissions) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    StatusPill(text = "Needs approval", accent = Color(0xFFE6A23C))
-                }
+            Text(projectPath, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(gitStatusSummary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (branch.isNotBlank()) SmallChip(branch, selected = true, onClick = onOpenGit)
+                SmallChip("Git", selected = false, onClick = onOpenGit)
+                SmallChip(compactRateLimitLabel(rateLimitInfo), selected = false, onClick = onCheckRateLimits)
+                if (ciStatus.isNotBlank()) SmallChip(ciStatus.removePrefix("CI status: ").trim(), selected = false, onClick = onOpenGit)
             }
         }
     }
 }
 
 @Composable
-private fun GitActionsDialog(
-    selectedBranch: String,
-    onDismiss: () -> Unit,
-    onShowDiff: () -> Unit,
-    onPull: () -> Unit,
-    onPush: () -> Unit,
-    onCommit: () -> Unit,
-    onCommitAndPush: () -> Unit
+private fun PendingPermissionStrip(
+    pendingPermissions: List<PendingPermissionRequest>,
+    onGrant: (String) -> Unit,
+    onDeny: (String) -> Unit
 ) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    text = "Git Actions",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                if (selectedBranch.isNotBlank()) {
-                    Text(
-                        text = "Branch $selectedBranch",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                GitActionMenuRow("∆", "Diff", onShowDiff)
-                GitActionMenuRow("✓", "Commit", onCommit)
-                GitActionMenuRow("⇪", "Commit & Push", onCommitAndPush)
-                GitActionMenuRow("↑", "Push", onPush)
-                GitActionMenuRow("↻", "Pull", onPull)
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Close")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun GitActionMenuRow(
-    iconGlyph: String,
-    label: String,
-    onClick: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = iconGlyph,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-        }
-    }
-}
-
-@Composable
-private fun CommitComposerDialog(
-    message: String,
-    onMessageChange: (String) -> Unit,
-    onDismiss: () -> Unit,
-    onCommit: () -> Unit,
-    onCommitAndPush: () -> Unit
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text("Commit Changes", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                OutlinedTextField(
-                    value = message,
-                    onValueChange = onMessageChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Commit message") },
-                    placeholder = { Text("Changes from Android") },
-                    minLines = 2,
-                    maxLines = 4
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
-                        Text("Cancel")
-                    }
-                    OutlinedButton(onClick = onCommit, modifier = Modifier.weight(1f)) {
-                        Text("Commit")
-                    }
-                    Button(onClick = onCommitAndPush, modifier = Modifier.weight(1f)) {
-                        Text("Commit & Push")
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DiffPreviewDialog(
-    title: String,
-    rawPatch: String,
-    onDismiss: () -> Unit
-) {
-    val entries = remember(rawPatch) { DiffPreviewParser.parse(rawPatch) }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(18.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                LazyColumn(
-                    modifier = Modifier.weight(1f, fill = false),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(entries, key = { it.path }) { entry ->
-                        DiffPreviewCard(entry = entry)
-                    }
-                }
-                TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
-                    Text("Done")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DiffPreviewCard(entry: DiffPreviewEntry) {
-    var expanded by rememberSaveable(entry.path) { mutableStateOf(false) }
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f), RoundedCornerShape(18.dp))
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(entry.compactPath, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                Text(entry.action, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                Text("+${entry.additions}", style = MaterialTheme.typography.labelSmall, color = Color(0xFF22A95A))
-                Text("-${entry.deletions}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFD74B4B))
-            }
-            entry.directoryPath?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Text(
-                text = entry.diff,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                maxLines = if (expanded) Int.MAX_VALUE else 8,
-                overflow = TextOverflow.Ellipsis
-            )
-            TextButton(onClick = { expanded = !expanded }) {
-                Text(if (expanded) "Show less" else "Show patch")
+    pendingPermissions.firstOrNull()?.let { permission ->
+        SectionCard(title = "Approval request", subtitle = permission.summary ?: permission.title) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { onGrant(permission.id) }, modifier = Modifier.weight(1f)) { Text("Allow") }
+                OutlinedButton(onClick = { onDeny(permission.id) }, modifier = Modifier.weight(1f)) { Text("Deny") }
             }
         }
     }
@@ -1343,9 +647,7 @@ private fun EmptyWorkspaceHome(
     onStartThread: () -> Unit
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.Center
     ) {
         EmptyHomeCard(
@@ -1355,112 +657,23 @@ private fun EmptyWorkspaceHome(
             projectPath = projectPath,
             rateLimitInfo = rateLimitInfo,
             ciStatus = ciStatus,
-            primaryActionLabel = when (connectionState) {
-                ConnectionState.Connected -> "New Chat"
-                ConnectionState.Connecting -> "Reconnecting..."
-                ConnectionState.Paired -> "Reconnect"
-                ConnectionState.Disconnected -> "Reconnect"
-                is ConnectionState.Failed -> "Reconnect"
-            },
-            onPrimaryAction = when (connectionState) {
-                ConnectionState.Connected -> onStartThread
-                else -> onReconnect
-            },
-            secondaryActionLabel = when (connectionState) {
-                ConnectionState.Connected -> "Sidebar"
-                else -> "Scan QR"
-            },
-            onSecondaryAction = when (connectionState) {
-                ConnectionState.Connected -> onOpenSidebar
-                else -> onOpenPairing
-            },
-            onForgetPair = if (connectionState == ConnectionState.Connected) {
-                null
-            } else {
-                onForgetPair
-            }
+            primaryActionLabel = if (connectionState == ConnectionState.Connected) "New Chat" else "Reconnect",
+            onPrimaryAction = if (connectionState == ConnectionState.Connected) onStartThread else onReconnect,
+            secondaryActionLabel = if (connectionState == ConnectionState.Connected) "Chats" else "Scan QR",
+            onSecondaryAction = if (connectionState == ConnectionState.Connected) onOpenSidebar else onOpenPairing,
+            onForgetPair = if (connectionState == ConnectionState.Connected) null else onForgetPair
         )
     }
 }
 
 @Composable
-private fun ConversationMetaRow(
-    projectPath: String,
-    gitStatusSummary: String,
-    gitActionStatus: String?,
-    rateLimitInfo: String,
-    ciStatus: String,
-    branches: List<String>,
-    selectedBranch: String,
-    onBranchSelected: (String) -> Unit,
-    onPull: () -> Unit,
-    onPush: () -> Unit
-) {
-    val hasCiStatus = ciStatus.isNotBlank()
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 1.dp
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(18.dp))
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = projectPath,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = gitActionStatus ?: gitStatusSummary,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (gitActionStatus.isNullOrBlank()) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    MaterialTheme.colorScheme.primary
-                }
-            )
-            Text(
-                text = rateLimitInfo,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            if (hasCiStatus) {
-                Text(
-                    text = ciStatus,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (branches.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    branches.forEach { branch ->
-                        SmallChip(
-                            text = branch,
-                            selected = branch == selectedBranch,
-                            onClick = { onBranchSelected(branch) }
-                        )
-                    }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onPull, modifier = Modifier.weight(1f)) {
-                    Text("Pull")
-                }
-                OutlinedButton(onClick = onPush, modifier = Modifier.weight(1f)) {
-                    Text("Push")
-                }
-            }
-        }
+private fun EmptyTimelineHint(status: String) {
+    SectionCard(title = "Start with a prompt", subtitle = status) {
+        Text(
+            text = "Use @files, ${'$'}skills, /commands, attachments, or voice from the composer below.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -1471,50 +684,20 @@ private fun RecoveryAccessoryCard(
     onDismiss: () -> Unit
 ) {
     val accent = when (snapshot.status) {
-        RecoveryAccessoryStatus.INTERRUPTED -> Color(0xFFE6A23C)
+        RecoveryAccessoryStatus.INTERRUPTED -> Color(0xFFFF9500)
+        RecoveryAccessoryStatus.ACTION_REQUIRED -> Color(0xFFFF9500)
         RecoveryAccessoryStatus.RECONNECTING -> MaterialTheme.colorScheme.primary
-        RecoveryAccessoryStatus.ACTION_REQUIRED -> Color(0xFFE6A23C)
         RecoveryAccessoryStatus.SYNCING -> MaterialTheme.colorScheme.primary
     }
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, accent.copy(alpha = 0.4f), RoundedCornerShape(18.dp))
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(
-                text = snapshot.title,
-                style = MaterialTheme.typography.labelLarge,
-                color = accent
-            )
-            Text(
-                text = snapshot.summary,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (!snapshot.detail.isNullOrBlank()) {
-                Text(
-                    text = snapshot.detail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+    SectionCard(title = snapshot.title, subtitle = snapshot.summary) {
+        snapshot.detail?.takeIf { it.isNotBlank() }?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            snapshot.actionLabel?.takeIf { it.isNotBlank() }?.let { label ->
+                Button(onClick = onAction, modifier = Modifier.weight(1f)) { Text(label) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                if (!snapshot.actionLabel.isNullOrBlank()) {
-                    OutlinedButton(onClick = onAction, modifier = Modifier.weight(1f)) {
-                        Text(snapshot.actionLabel)
-                    }
-                }
-                OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) {
-                    Text("Close")
-                }
-            }
+            OutlinedButton(onClick = onDismiss, modifier = Modifier.weight(1f)) { Text("Close") }
         }
     }
 }
@@ -1526,590 +709,349 @@ private fun ComposerDock(
     availableModels: List<String>,
     selectedReasoningEffort: String,
     availableReasoningEfforts: List<String>,
-    selectedBranch: String,
-    rateLimitInfo: String,
-    ciStatus: String,
-    selectedThreadId: String?,
     composerInput: String,
     onComposerInputChange: (String) -> Unit,
     dockCollapsedSide: String,
-    voiceDraftText: String,
-    onVoiceDraftTextChange: (String) -> Unit,
     mediaAttachments: List<TurnImageAttachment>,
-    attachmentHint: String?,
-    subagentsArmed: Boolean,
-    armedReviewTarget: ReviewTarget?,
-    showReviewTargetSuggestions: Boolean,
-    showForkDestinationSuggestions: Boolean,
     mentionedFiles: List<String>,
     mentionedSkills: List<SkillSuggestion>,
-    activeComposerToken: ComposerAutocompleteToken?,
+    attachmentHint: String?,
+    activeToken: ComposerAutocompleteToken?,
     fileSuggestions: List<FileAutocompleteMatch>,
     skillSuggestions: List<SkillSuggestion>,
     commandSuggestions: List<ComposerCommand>,
     queuedDrafts: List<QueuedComposerDraft>,
     queuePaused: Boolean,
-    steeringQueuedDraftId: String?,
-    isRunning: Boolean,
+    subagentsArmed: Boolean,
+    reviewTarget: ReviewTarget?,
+    showReviewTargets: Boolean,
+    showForkTargets: Boolean,
     isDispatching: Boolean,
+    isRunning: Boolean,
     onQueuePausedChange: (Boolean) -> Unit,
-    onAttachGallery: () -> Unit,
-    onAttachCamera: () -> Unit,
-    onUseVoiceDraft: () -> Unit,
-    onCheckRateLimits: () -> Unit,
     onSwitchModel: (String) -> Unit,
     onSwitchReasoningEffort: (String) -> Unit,
+    onAttachGallery: () -> Unit,
+    onAttachCamera: () -> Unit,
+    onVoice: () -> Unit,
+    onCheckRateLimits: () -> Unit,
+    onSelectFile: (ComposerAutocompleteToken.File, FileAutocompleteMatch) -> Unit,
+    onSelectSkill: (ComposerAutocompleteToken.Skill, SkillSuggestion) -> Unit,
+    onSelectCommand: (ComposerCommand) -> Unit,
     onRemoveAttachment: (TurnImageAttachment) -> Unit,
-    onToggleSubagentsArmed: () -> Unit,
-    onClearSubagentsArmed: () -> Unit,
-    onClearReviewTarget: () -> Unit,
     onRemoveMentionedFile: (String) -> Unit,
     onRemoveMentionedSkill: (SkillSuggestion) -> Unit,
-    onSelectFileSuggestion: (ComposerAutocompleteToken.File, FileAutocompleteMatch) -> Unit,
-    onSelectSkillSuggestion: (ComposerAutocompleteToken.Skill, SkillSuggestion) -> Unit,
-    onSelectCommandSuggestion: (ComposerCommand) -> Unit,
-    onRestoreQueuedDraft: (String) -> Unit,
-    onSteerQueuedDraft: (String) -> Unit,
-    onRemoveQueuedDraft: (String) -> Unit,
+    onToggleSubagents: () -> Unit,
+    onSelectReviewTarget: (ReviewTarget) -> Unit,
+    onDismissReviewTargets: () -> Unit,
+    onForkLocal: () -> Unit,
+    onForkWorktree: () -> Unit,
+    onDismissForkTargets: () -> Unit,
+    onRestoreQueuedDraft: (QueuedComposerDraft) -> Unit,
+    onRemoveQueuedDraft: (QueuedComposerDraft) -> Unit,
     onClearQueue: () -> Unit,
-    onSelectReviewTargetSuggestion: (ReviewTarget) -> Unit,
-    onDismissReviewTargetSuggestions: () -> Unit,
-    onSelectForkDestinationLocal: () -> Unit,
-    onSelectForkDestinationNewWorktree: () -> Unit,
-    onDismissForkDestinationSuggestions: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
-    var showAdvancedActions by rememberSaveable { mutableStateOf(false) }
-    var showModelMenu by rememberSaveable { mutableStateOf(false) }
-    var showReasoningMenu by rememberSaveable { mutableStateOf(false) }
-    var isInputFocused by rememberSaveable { mutableStateOf(false) }
-    var isCollapsed by rememberSaveable(selectedThreadId) { mutableStateOf(false) }
-    val showsPrimaryStop = !isDispatching && selectedThreadId != null && isRunning && composerInput.isBlank() && mediaAttachments.isEmpty()
+    var focused by rememberSaveable { mutableStateOf(false) }
+    var collapsed by rememberSaveable { mutableStateOf(false) }
+    var advancedOpen by rememberSaveable { mutableStateOf(false) }
+    var modelOpen by rememberSaveable { mutableStateOf(false) }
+    var reasoningOpen by rememberSaveable { mutableStateOf(false) }
+    val showStop = composerInput.isBlank() && mediaAttachments.isEmpty() && isRunning && !isDispatching
+    val collapsedScale by animateFloatAsState(if (collapsed) 0.74f else 1f, animationSpec = tween(220), label = "composerScale")
 
-    LaunchedEffect(isInputFocused, composerInput, isRunning, isDispatching, showAdvancedActions, showModelMenu, showReasoningMenu) {
-        if (isInputFocused || composerInput.isNotBlank() || isDispatching || showAdvancedActions || showModelMenu || showReasoningMenu) {
-            isCollapsed = false
-        } else if (!isRunning) {
-            isCollapsed = true
-        }
+    LaunchedEffect(focused, composerInput, isDispatching, advancedOpen, modelOpen, reasoningOpen) {
+        collapsed = !focused && composerInput.isBlank() && !isDispatching && !advancedOpen && !modelOpen && !reasoningOpen
     }
 
-    Box(modifier = modifier.navigationBarsPadding()) {
+    Box(modifier = modifier.fillMaxWidth().navigationBarsPadding()) {
         AnimatedVisibility(
-            visible = !isCollapsed,
-            enter = fadeIn(animationSpec = tween(220)) + expandVertically(animationSpec = tween(220)),
-            exit = fadeOut(animationSpec = tween(180)) + shrinkVertically(animationSpec = tween(180))
+            visible = !collapsed,
+            enter = fadeIn(tween(180)),
+            exit = fadeOut(tween(160))
         ) {
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().scale(collapsedScale),
                 color = MaterialTheme.colorScheme.background.copy(alpha = 0.98f),
-                tonalElevation = 2.dp,
+                tonalElevation = 3.dp,
                 shadowElevation = 8.dp
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-            if (queuedDrafts.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(14.dp))
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = "Queued ${queuedDrafts.size}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f)
-                        )
-                        SmallChip(
-                            text = if (queuePaused) "Resume" else "Pause",
-                            selected = false,
-                            onClick = { onQueuePausedChange(!queuePaused) }
-                        )
-                        SmallChip(text = "Clear", selected = false, onClick = onClearQueue)
-                    }
-                    queuedDrafts.forEach { draft ->
-                        QueuedDraftRow(
-                            draft = draft,
-                            canSteer = isRunning && selectedThreadId != null,
-                            canRestore = steeringQueuedDraftId == null,
-                            steeringQueuedDraftId = steeringQueuedDraftId,
-                            onRestore = { onRestoreQueuedDraft(draft.id) },
-                            onSteer = { onSteerQueuedDraft(draft.id) },
-                            onRemove = { onRemoveQueuedDraft(draft.id) }
-                        )
-                    }
-                }
-            }
-
-            if (showForkDestinationSuggestions) {
-                SuggestionTray(
-                    labels = listOf("Fork into local", "Fork into new worktree", "Cancel"),
-                    onSelected = { index ->
-                        when (index) {
-                            0 -> onSelectForkDestinationLocal()
-                            1 -> onSelectForkDestinationNewWorktree()
-                            else -> onDismissForkDestinationSuggestions()
-                        }
-                    }
-                )
-            } else if (showReviewTargetSuggestions) {
-                SuggestionTray(
-                    labels = listOf("Uncommitted changes", "Base branch", "Cancel"),
-                    onSelected = { index ->
-                        when (index) {
-                            0 -> onSelectReviewTargetSuggestion(ReviewTarget.UNCOMMITTED_CHANGES)
-                            1 -> onSelectReviewTargetSuggestion(ReviewTarget.BASE_BRANCH)
-                            else -> onDismissReviewTargetSuggestions()
-                        }
-                    }
-                )
-            } else {
-                when (val token = activeComposerToken) {
-                    is ComposerAutocompleteToken.File -> {
-                        if (fileSuggestions.isNotEmpty()) {
-                            SuggestionTray(
-                                labels = fileSuggestions.map { it.fileName },
-                                onSelected = { index -> onSelectFileSuggestion(token, fileSuggestions[index]) }
-                            )
-                        }
-                    }
-
-                    is ComposerAutocompleteToken.Skill -> {
-                        if (skillSuggestions.isNotEmpty()) {
-                            SuggestionTray(
-                                labels = skillSuggestions.map { "\$${it.name}" },
-                                onSelected = { index -> onSelectSkillSuggestion(token, skillSuggestions[index]) }
-                            )
-                        }
-                    }
-
-                    is ComposerAutocompleteToken.Command -> {
-                        if (commandSuggestions.isNotEmpty()) {
-                            SuggestionTray(
-                                labels = commandSuggestions.map { it.token },
-                                onSelected = { index -> onSelectCommandSuggestion(commandSuggestions[index]) }
-                            )
-                        }
-                    }
-
-                    null -> Unit
-                }
-            }
-
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 1.dp
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(24.dp))
-                        .padding(top = 12.dp, bottom = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    if (
-                        mediaAttachments.isNotEmpty()
-                        || mentionedFiles.isNotEmpty()
-                        || mentionedSkills.isNotEmpty()
-                        || subagentsArmed
-                        || armedReviewTarget != null
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            mediaAttachments.forEach { attachment ->
-                                SmallChip(
-                                    text = attachment.label ?: "image",
-                                    selected = true,
-                                    onClick = { onRemoveAttachment(attachment) }
-                                )
-                            }
-                            mentionedFiles.forEach { mention ->
-                                SmallChip(
-                                    text = "@${mention.substringAfterLast('/')}",
-                                    selected = true,
-                                    onClick = { onRemoveMentionedFile(mention) }
-                                )
-                            }
-                            mentionedSkills.forEach { skill ->
-                                SmallChip(
-                                    text = "\$${skill.name}",
-                                    selected = true,
-                                    onClick = { onRemoveMentionedSkill(skill) }
-                                )
-                            }
-                            if (subagentsArmed) {
-                                SmallChip(
-                                    text = "/subagents",
-                                    selected = true,
-                                    onClick = onClearSubagentsArmed
-                                )
-                            }
-                            armedReviewTarget?.let { target ->
-                                SmallChip(
-                                    text = reviewTargetChipLabel(target),
-                                    selected = true,
-                                    onClick = onClearReviewTarget
-                                )
-                            }
-                        }
-                    }
-
-                    if (!attachmentHint.isNullOrBlank()) {
-                        Text(
-                            text = attachmentHint,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
-                    }
-                    if (isDispatching) {
-                        Text(
-                            text = "Sending to Codex...",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
-                    }
-
-                    if (voiceDraftText.isNotBlank()) {
-                        OutlinedTextField(
-                            value = voiceDraftText,
-                            onValueChange = onVoiceDraftTextChange,
-                            label = { Text("Voice draft") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp)
-                        )
-                    }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        OutlinedTextField(
-                            value = composerInput,
-                            onValueChange = onComposerInputChange,
-                            placeholder = { Text("Ask anything... @files, \$skills, /commands") },
-                            textStyle = MaterialTheme.typography.bodyMedium,
-                            enabled = !isDispatching,
-                            modifier = Modifier
-                                .weight(1f)
-                                .onFocusChanged { focusState ->
-                                    isInputFocused = focusState.isFocused
-                                },
-                            minLines = 1,
-                            maxLines = 5,
-                            shape = RoundedCornerShape(18.dp)
-                        )
-                    }
-                    if (showModelMenu && availableModels.isNotEmpty()) {
-                        SuggestionTray(
-                            labels = availableModels,
-                            onSelected = { index ->
-                                onSwitchModel(availableModels[index])
-                                showModelMenu = false
-                            }
-                        )
-                    }
-                    if (showReasoningMenu && availableReasoningEfforts.isNotEmpty()) {
-                        SuggestionTray(
-                            labels = availableReasoningEfforts,
-                            onSelected = { index ->
-                                onSwitchReasoningEffort(availableReasoningEfforts[index])
-                                showReasoningMenu = false
-                            }
-                        )
-                    }
-                    if (showAdvancedActions) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            ComposerMenuPill(
-                                title = "Photo library",
-                                selected = false,
-                                onClick = onAttachGallery,
-                                modifier = Modifier.weight(1f)
-                            )
-                            ComposerMenuPill(
-                                title = "Take photo",
-                                selected = false,
-                                onClick = onAttachCamera,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                    ComposerMetaRow(
-                        selectedBranch = selectedBranch,
-                        hasBranch = selectedBranch.isNotBlank(),
-                        rateLimitInfo = rateLimitInfo,
-                        ciStatus = ciStatus,
-                        onRefreshStatus = onCheckRateLimits
+                    ComposerSuggestionLayer(
+                        activeToken = activeToken,
+                        fileSuggestions = fileSuggestions,
+                        skillSuggestions = skillSuggestions,
+                        commandSuggestions = commandSuggestions,
+                        showReviewTargets = showReviewTargets,
+                        showForkTargets = showForkTargets,
+                        onSelectFile = onSelectFile,
+                        onSelectSkill = onSelectSkill,
+                        onSelectCommand = onSelectCommand,
+                        onSelectReviewTarget = onSelectReviewTarget,
+                        onDismissReviewTargets = onDismissReviewTargets,
+                        onForkLocal = onForkLocal,
+                        onForkWorktree = onForkWorktree,
+                        onDismissForkTargets = onDismissForkTargets
                     )
-                    ComposerBottomBar(
-                        selectedModel = selectedModel,
-                        selectedReasoningEffort = selectedReasoningEffort,
-                        subagentsArmed = subagentsArmed,
-                        queuePaused = queuePaused,
-                        queuedCount = queuedDrafts.size,
-                        showAdvancedActions = showAdvancedActions,
-                        showModelMenu = showModelMenu,
-                        showReasoningMenu = showReasoningMenu,
-                        isDispatching = isDispatching,
-                        showsPrimaryStop = showsPrimaryStop,
-                        onToggleAdvancedActions = { showAdvancedActions = !showAdvancedActions },
-                        onToggleModelMenu = {
-                            showModelMenu = !showModelMenu
-                            if (showModelMenu) {
-                                showReasoningMenu = false
+                    if (queuedDrafts.isNotEmpty()) {
+                        QueuedDraftsPanel(queuedDrafts, queuePaused, onQueuePausedChange, onRestoreQueuedDraft, onRemoveQueuedDraft, onClearQueue)
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(26.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 1.dp,
+                        modifier = Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f), RoundedCornerShape(26.dp))
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            ComposerAccessoryChips(
+                                mediaAttachments,
+                                mentionedFiles,
+                                mentionedSkills,
+                                subagentsArmed,
+                                reviewTarget,
+                                onRemoveAttachment,
+                                onRemoveMentionedFile,
+                                onRemoveMentionedSkill,
+                                onToggleSubagents
+                            )
+                            attachmentHint?.let {
+                                Text(it, modifier = Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
                             }
-                        },
-                        onToggleReasoningMenu = {
-                            showReasoningMenu = !showReasoningMenu
-                            if (showReasoningMenu) {
-                                showModelMenu = false
+                            if (isDispatching) {
+                                Text("Dispatching to Codex...", modifier = Modifier.padding(horizontal = 12.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                             }
-                        },
-                        onToggleSubagents = onToggleSubagentsArmed,
-                        onResumeQueue = { onQueuePausedChange(false) },
-                        onUseVoiceDraft = onUseVoiceDraft,
-                        onCheckRateLimits = onCheckRateLimits,
-                        onStop = onStop,
-                        onSend = onSend
-                    )
-                }
-            }
-
+                            OutlinedTextField(
+                                value = composerInput,
+                                onValueChange = onComposerInputChange,
+                                placeholder = { Text("Ask anything... @files, ${'$'}skills, /commands") },
+                                minLines = 1,
+                                maxLines = 4,
+                                enabled = !isDispatching,
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).onFocusChanged { focused = it.isFocused },
+                                shape = RoundedCornerShape(20.dp),
+                                textStyle = MaterialTheme.typography.bodyMedium
+                            )
+                            if (advancedOpen) {
+                                Row(Modifier.padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    ComposerMenuPill("Photo", false, onAttachGallery, Modifier.weight(1f), showChevron = false)
+                                    ComposerMenuPill("Camera", false, onAttachCamera, Modifier.weight(1f), showChevron = false)
+                                    ComposerMenuPill("Subagents", subagentsArmed, onToggleSubagents, Modifier.weight(1f), showChevron = false)
+                                }
+                            }
+                            ComposerRuntimeBar(
+                                selectedModel = selectedModel,
+                                availableModels = availableModels,
+                                modelOpen = modelOpen,
+                                onToggleModel = { modelOpen = !modelOpen; reasoningOpen = false },
+                                onSelectModel = { onSwitchModel(it); modelOpen = false },
+                                selectedReasoningEffort = selectedReasoningEffort,
+                                availableReasoningEfforts = availableReasoningEfforts,
+                                reasoningOpen = reasoningOpen,
+                                onToggleReasoning = { reasoningOpen = !reasoningOpen; modelOpen = false },
+                                onSelectReasoning = { onSwitchReasoningEffort(it); reasoningOpen = false },
+                                advancedOpen = advancedOpen,
+                                onToggleAdvanced = { advancedOpen = !advancedOpen },
+                                onCheckRateLimits = onCheckRateLimits,
+                                onVoice = onVoice,
+                                showStop = showStop,
+                                isDispatching = isDispatching,
+                                onSend = onSend,
+                                onStop = onStop
+                            )
+                        }
+                    }
                 }
             }
         }
-        if (!isInputFocused && isCollapsed) {
+        if (collapsed) {
             CollapsedComposerHandle(
-                modifier = Modifier.align(
-                    if (dockCollapsedSide.equals("left", ignoreCase = true)) Alignment.BottomStart else Alignment.BottomEnd
-                ),
-                onExpand = { isCollapsed = false }
+                modifier = Modifier.align(if (dockCollapsedSide.equals("left", true)) Alignment.BottomStart else Alignment.BottomEnd),
+                onExpand = { collapsed = false }
             )
         }
     }
 }
 
 @Composable
-private fun ComposerMetaRow(
-    selectedBranch: String,
-    hasBranch: Boolean,
-    rateLimitInfo: String,
-    ciStatus: String,
-    onRefreshStatus: () -> Unit
+private fun ComposerSuggestionLayer(
+    activeToken: ComposerAutocompleteToken?,
+    fileSuggestions: List<FileAutocompleteMatch>,
+    skillSuggestions: List<SkillSuggestion>,
+    commandSuggestions: List<ComposerCommand>,
+    showReviewTargets: Boolean,
+    showForkTargets: Boolean,
+    onSelectFile: (ComposerAutocompleteToken.File, FileAutocompleteMatch) -> Unit,
+    onSelectSkill: (ComposerAutocompleteToken.Skill, SkillSuggestion) -> Unit,
+    onSelectCommand: (ComposerCommand) -> Unit,
+    onSelectReviewTarget: (ReviewTarget) -> Unit,
+    onDismissReviewTargets: () -> Unit,
+    onForkLocal: () -> Unit,
+    onForkWorktree: () -> Unit,
+    onDismissForkTargets: () -> Unit
+) {
+    when {
+        showForkTargets -> SuggestionTray(listOf("Fork in current project", "Fork in new worktree", "Cancel")) { index ->
+            when (index) { 0 -> onForkLocal(); 1 -> onForkWorktree(); else -> onDismissForkTargets() }
+        }
+        showReviewTargets -> SuggestionTray(listOf("Review uncommitted changes", "Review base branch", "Cancel")) { index ->
+            when (index) { 0 -> onSelectReviewTarget(ReviewTarget.UNCOMMITTED_CHANGES); 1 -> onSelectReviewTarget(ReviewTarget.BASE_BRANCH); else -> onDismissReviewTargets() }
+        }
+        activeToken is ComposerAutocompleteToken.File && fileSuggestions.isNotEmpty() -> SuggestionTray(fileSuggestions.map { it.fileName }) { onSelectFile(activeToken, fileSuggestions[it]) }
+        activeToken is ComposerAutocompleteToken.Skill && skillSuggestions.isNotEmpty() -> SuggestionTray(skillSuggestions.map { "$${it.name}" }) { onSelectSkill(activeToken, skillSuggestions[it]) }
+        activeToken is ComposerAutocompleteToken.Command && commandSuggestions.isNotEmpty() -> SuggestionTray(commandSuggestions.map { it.token }) { onSelectCommand(commandSuggestions[it]) }
+    }
+}
+
+@Composable
+private fun ComposerAccessoryChips(
+    mediaAttachments: List<TurnImageAttachment>,
+    mentionedFiles: List<String>,
+    mentionedSkills: List<SkillSuggestion>,
+    subagentsArmed: Boolean,
+    reviewTarget: ReviewTarget?,
+    onRemoveAttachment: (TurnImageAttachment) -> Unit,
+    onRemoveFile: (String) -> Unit,
+    onRemoveSkill: (SkillSuggestion) -> Unit,
+    onToggleSubagents: () -> Unit
+) {
+    if (mediaAttachments.isEmpty() && mentionedFiles.isEmpty() && mentionedSkills.isEmpty() && !subagentsArmed && reviewTarget == null) return
+    Row(
+        modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        mediaAttachments.forEach { SmallChip(it.label ?: "image", true) { onRemoveAttachment(it) } }
+        mentionedFiles.forEach { SmallChip("@${it.substringAfterLast('/')}", true) { onRemoveFile(it) } }
+        mentionedSkills.forEach { SmallChip("$${it.name}", true) { onRemoveSkill(it) } }
+        if (subagentsArmed) SmallChip("/subagents", true, onToggleSubagents)
+        reviewTarget?.let { SmallChip(reviewTargetChipLabel(it), true) {} }
+    }
+}
+
+@Composable
+private fun ComposerRuntimeBar(
+    selectedModel: String,
+    availableModels: List<String>,
+    modelOpen: Boolean,
+    onToggleModel: () -> Unit,
+    onSelectModel: (String) -> Unit,
+    selectedReasoningEffort: String,
+    availableReasoningEfforts: List<String>,
+    reasoningOpen: Boolean,
+    onToggleReasoning: () -> Unit,
+    onSelectReasoning: (String) -> Unit,
+    advancedOpen: Boolean,
+    onToggleAdvanced: () -> Unit,
+    onCheckRateLimits: () -> Unit,
+    onVoice: () -> Unit,
+    showStop: Boolean,
+    isDispatching: Boolean,
+    onSend: () -> Unit,
+    onStop: () -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        ComposerMenuPill(title = "Local", selected = false, onClick = {}, showChevron = false)
-        if (hasBranch) {
-            ComposerMenuPill(title = selectedBranch, selected = true, onClick = {}, showChevron = false)
+        ComposerCircleButton(if (advancedOpen) "-" else "+", "Attachments", false, onToggleAdvanced, enabled = !isDispatching)
+        Box {
+            ComposerMenuPill(selectedModel, modelOpen, onToggleModel, showChevron = true)
+            DropdownMenu(expanded = modelOpen, onDismissRequest = onToggleModel) {
+                availableModels.forEach { DropdownMenuItem(text = { Text(it) }, onClick = { onSelectModel(it) }) }
+            }
         }
-        val statusLabel = when {
-            ciStatus.isNotBlank() -> ciStatus.removePrefix("CI status: ").trim()
-            else -> rateLimitInfo.removePrefix("Rate limit: ").trim()
+        Box {
+            ComposerMenuPill(selectedReasoningEffort, reasoningOpen, onToggleReasoning, showChevron = true)
+            DropdownMenu(expanded = reasoningOpen, onDismissRequest = onToggleReasoning) {
+                availableReasoningEfforts.forEach { DropdownMenuItem(text = { Text(it) }, onClick = { onSelectReasoning(it) }) }
+            }
         }
-        Spacer(modifier = Modifier.weight(1f))
-        if (statusLabel.isNotBlank()) {
-            ComposerMenuPill(
-                title = statusLabel,
-                selected = false,
-                onClick = onRefreshStatus,
-                showChevron = false
-            )
-        }
-    }
-}
-
-@Composable
-private fun ComposerBottomBar(
-    selectedModel: String,
-    selectedReasoningEffort: String,
-    subagentsArmed: Boolean,
-    queuePaused: Boolean,
-    queuedCount: Int,
-    showAdvancedActions: Boolean,
-    showModelMenu: Boolean,
-    showReasoningMenu: Boolean,
-    isDispatching: Boolean,
-    showsPrimaryStop: Boolean,
-    onToggleAdvancedActions: () -> Unit,
-    onToggleModelMenu: () -> Unit,
-    onToggleReasoningMenu: () -> Unit,
-    onToggleSubagents: () -> Unit,
-    onResumeQueue: () -> Unit,
-    onUseVoiceDraft: () -> Unit,
-    onCheckRateLimits: () -> Unit,
-    onStop: () -> Unit,
-    onSend: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Row(
-            modifier = Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ComposerCircleButton(
-                glyph = if (showAdvancedActions) "−" else "+",
-                contentDescription = if (showAdvancedActions) "Hide attachments" else "Show attachments",
-                filled = false,
-                onClick = onToggleAdvancedActions,
-                enabled = !isDispatching
-            )
-            ComposerMenuPill(
-                title = selectedModel,
-                selected = showModelMenu,
-                onClick = { if (!isDispatching) onToggleModelMenu() },
-                modifier = Modifier.weight(1f)
-            )
-            ComposerMenuPill(
-                title = selectedReasoningEffort,
-                selected = showReasoningMenu,
-                onClick = { if (!isDispatching) onToggleReasoningMenu() }
-            )
-        }
-        if (subagentsArmed) {
-            ComposerCircleButton(
-                glyph = "✦",
-                contentDescription = "Toggle subagents",
-                filled = true,
-                onClick = onToggleSubagents,
-                enabled = !isDispatching,
-                compact = true
-            )
-        }
-        if (queuePaused && queuedCount > 0) {
-            ComposerCircleButton(
-                glyph = "↻",
-                contentDescription = "Resume queue",
-                filled = false,
-                onClick = onResumeQueue
-            )
-        }
+        ComposerCircleButton("L", "Rate limits", false, onCheckRateLimits, compact = true)
+        Spacer(Modifier.weight(1f))
+        ComposerCircleButton("M", "Voice", false, onVoice, enabled = !isDispatching)
         ComposerCircleButton(
-            glyph = "•",
-            contentDescription = "Voice draft",
-            filled = false,
-            onClick = onUseVoiceDraft,
-            enabled = !isDispatching
-        )
-        ComposerCircleButton(
-            glyph = when {
-                isDispatching -> "…"
-                showsPrimaryStop -> "■"
-                else -> "↑"
-            },
-            contentDescription = if (showsPrimaryStop) "Stop current turn" else "Send message",
+            glyph = when { isDispatching -> "..."; showStop -> "[]"; else -> "^" },
+            contentDescription = if (showStop) "Stop" else "Send",
             filled = true,
-            onClick = if (isDispatching) ({}) else if (showsPrimaryStop) onStop else onSend,
-            enabled = !isDispatching || showsPrimaryStop
+            onClick = if (showStop) onStop else onSend,
+            enabled = !isDispatching || showStop
         )
     }
 }
 
 @Composable
-private fun CollapsedComposerHandle(
-    modifier: Modifier = Modifier,
-    onExpand: () -> Unit
+private fun QueuedDraftsPanel(
+    drafts: List<QueuedComposerDraft>,
+    queuePaused: Boolean,
+    onQueuePausedChange: (Boolean) -> Unit,
+    onRestore: (QueuedComposerDraft) -> Unit,
+    onRemove: (QueuedComposerDraft) -> Unit,
+    onClear: () -> Unit
 ) {
+    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceVariant) {
+        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Queued ${drafts.size}", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                SmallChip(if (queuePaused) "Resume" else "Pause", false) { onQueuePausedChange(!queuePaused) }
+                Spacer(Modifier.width(6.dp))
+                SmallChip("Clear", false, onClear)
+            }
+            drafts.take(3).forEach { draft ->
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(draft.text.ifBlank { "Attachment draft" }, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { onRestore(draft) }) { Text("Restore") }
+                    TextButton(onClick = { onRemove(draft) }) { Text("Remove") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollapsedComposerHandle(modifier: Modifier, onExpand: () -> Unit) {
     Surface(
-        modifier = modifier
-            .padding(horizontal = 12.dp, vertical = 18.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .clickable(onClick = onExpand),
+        modifier = modifier.padding(14.dp).clip(RoundedCornerShape(999.dp)).clickable(onClick = onExpand),
         shape = RoundedCornerShape(999.dp),
         color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 6.dp,
-        shadowElevation = 12.dp
+        tonalElevation = 2.dp,
+        shadowElevation = 8.dp
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "✎",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Text(
-                text = "Ask",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Ask", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text("^", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
 
 @Composable
-private fun TimelineScrubber(
-    modifier: Modifier = Modifier,
-    count: Int,
-    onPositionChanged: (Float) -> Unit
-) {
-    Surface(
-        modifier = modifier
-            .pointerInput(count) {
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        onPositionChanged((offset.y / size.height).coerceIn(0f, 1f))
-                    },
-                    onDrag = { change, _ ->
-                        onPositionChanged((change.position.y / size.height).coerceIn(0f, 1f))
-                    }
-                )
-            }
-            .clickable { onPositionChanged(1f) },
-        shape = RoundedCornerShape(999.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+private fun TimelineScrubber(indexes: List<Int>, modifier: Modifier, onJumpToIndex: (Int) -> Unit) {
+    if (indexes.isEmpty()) return
+    Column(
+        modifier = modifier.padding(end = 6.dp).clip(RoundedCornerShape(999.dp)).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)).padding(horizontal = 5.dp, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        indexes.forEach { index ->
+            Box(Modifier.size(width = 5.dp, height = 16.dp).clip(RoundedCornerShape(999.dp)).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)).clickable { onJumpToIndex(index) })
+        }
+    }
+}
+
+@Composable
+private fun SuggestionTray(labels: List<String>, onSelected: (Int) -> Unit) {
+    Surface(shape = RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surface, tonalElevation = 2.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            repeat(count.coerceAtMost(18)) {
-                Text(
-                    text = "•",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center
-                )
-            }
+            labels.forEachIndexed { index, label -> SmallChip(label, selected = index == 0, onClick = { onSelected(index) }) }
         }
     }
 }
@@ -2123,36 +1065,18 @@ private fun ComposerMenuPill(
     showChevron: Boolean = true
 ) {
     Surface(
-        modifier = modifier
-            .clip(RoundedCornerShape(999.dp))
-            .clickable(onClick = onClick),
+        modifier = modifier.clip(RoundedCornerShape(999.dp)).clickable(onClick = onClick),
         shape = RoundedCornerShape(999.dp),
-        color = if (selected) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
-        }
+        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (showChevron) {
-                Text(
-                    text = "v",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+        Text(
+            text = if (showChevron) "$title v" else title,
+            modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 
@@ -2162,161 +1086,126 @@ private fun ComposerCircleButton(
     contentDescription: String,
     filled: Boolean,
     onClick: () -> Unit,
-    compact: Boolean = false,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    compact: Boolean = false
 ) {
+    val bg = if (filled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    val fg = if (filled) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
     Surface(
-        modifier = Modifier
-            .clip(RoundedCornerShape(999.dp))
-            .clickable(enabled = enabled, onClick = onClick),
-        shape = RoundedCornerShape(999.dp),
-        color = if (filled) {
-            if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.48f)
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = if (enabled) 0.78f else 0.42f)
+        modifier = Modifier.alpha(if (enabled) 1f else 0.45f).size(if (compact) 34.dp else 40.dp).clip(CircleShape).clickable(enabled = enabled, onClick = onClick),
+        shape = CircleShape,
+        color = bg
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Text(glyph, style = MaterialTheme.typography.titleMedium, color = fg, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun GitActionsDialog(
+    branches: List<String>,
+    selectedBranch: String,
+    gitStatusSummary: String,
+    onBranchSelected: (String) -> Unit,
+    onPull: () -> Unit,
+    onPush: () -> Unit,
+    onCommit: () -> Unit,
+    onDiff: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Git") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(gitStatusSummary, style = MaterialTheme.typography.bodySmall)
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    branches.forEach { SmallChip(it, it == selectedBranch) { onBranchSelected(it) } }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onPull, modifier = Modifier.weight(1f)) { Text("Pull") }
+                    OutlinedButton(onClick = onPush, modifier = Modifier.weight(1f)) { Text("Push") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onDiff, modifier = Modifier.weight(1f)) { Text("Diff") }
+                    Button(onClick = onCommit, modifier = Modifier.weight(1f)) { Text("Commit & Push") }
+                }
+            }
         },
-        border = if (filled) null else androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outline.copy(alpha = if (enabled) 0.6f else 0.3f)
-        )
-    ) {
-        Text(
-            text = glyph,
-            style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleMedium,
-            color = if (filled) {
-                MaterialTheme.colorScheme.surface.copy(alpha = if (enabled) 1f else 0.78f)
-            } else {
-                MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.58f)
-            },
-            modifier = Modifier
-                .padding(
-                    horizontal = if (compact) 11.dp else 10.dp,
-                    vertical = if (compact) 8.dp else 9.dp
-                )
-                .size(if (compact) 18.dp else 20.dp),
-            textAlign = TextAlign.Center
-        )
-    }
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
 }
 
 @Composable
-private fun SuggestionTray(
-    labels: List<String>,
-    onSelected: (Int) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        labels.forEachIndexed { index, label ->
-            SmallChip(text = label, selected = false, onClick = { onSelected(index) })
-        }
-    }
+private fun TextPreviewDialog(title: String, body: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(body.ifBlank { "No changes." }, style = MaterialTheme.typography.bodySmall, maxLines = 18, overflow = TextOverflow.Ellipsis) },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } }
+    )
 }
 
 @Composable
-private fun QueuedDraftRow(
-    draft: QueuedComposerDraft,
-    canSteer: Boolean,
-    canRestore: Boolean,
-    steeringQueuedDraftId: String?,
-    onRestore: () -> Unit,
-    onSteer: () -> Unit,
-    onRemove: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = draft.text,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        SmallChip(
-            text = "Restore",
-            selected = false,
-            onClick = if (canRestore) onRestore else ({})
-        )
-        if (canSteer) {
-            SmallChip(
-                text = if (steeringQueuedDraftId == draft.id) "Steering..." else "Steer",
-                selected = false,
-                onClick = if (steeringQueuedDraftId == null) onSteer else ({})
+private fun CommitDialog(value: String, onValueChange: (String) -> Unit, onDismiss: () -> Unit, onCommit: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Commit & Push") },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                label = { Text("Commit message") },
+                placeholder = { Text("Changes from Remodex Android") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
             )
-        }
-        SmallChip(
-            text = "Remove",
-            selected = false,
-            onClick = if (steeringQueuedDraftId == draft.id) ({}) else onRemove
-        )
-    }
+        },
+        confirmButton = { Button(onClick = onCommit) { Text("Commit") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 private data class QueuedComposerDraft(
-    val id: String,
+    val id: String = System.currentTimeMillis().toString(16),
     val text: String,
-    val subagentsArmed: Boolean = false,
-    val fileMentions: List<String>,
-    val skillMentions: List<SkillSuggestion>,
     val attachments: List<TurnImageAttachment>
 )
 
-private fun nullIfBlank(value: String?): String? {
-    val normalized = value?.trim().orEmpty()
-    return normalized.takeIf { it.isNotEmpty() }
-}
-
-private fun reviewTargetChipLabel(target: ReviewTarget): String {
-    return when (target) {
-        ReviewTarget.UNCOMMITTED_CHANGES -> "Review: Uncommitted"
-        ReviewTarget.BASE_BRANCH -> "Review: Base branch"
-    }
-}
-
 private fun stripTrailingSlashCommandToken(input: String): String {
     val token = detectComposerAutocompleteToken(input) as? ComposerAutocompleteToken.Command ?: return input
-    if (token.endIndexExclusive != input.length) {
-        return input
-    }
-    return input.substring(0, token.startIndex).trimEnd()
+    return input.removeRange(token.startIndex, token.endIndexExclusive).trimEnd()
 }
 
 private fun buildComposerPayloadText(
-    text: String,
-    subagentsArmed: Boolean
+    input: String,
+    mentionedFiles: List<String>,
+    mentionedSkills: List<SkillSuggestion>,
+    subagentsArmed: Boolean,
+    armedReviewTarget: ReviewTarget?
 ): String {
-    val normalized = text.trim()
-    if (!subagentsArmed) {
-        return normalized
-    }
-    return if (normalized.isEmpty()) {
-        SUBAGENTS_CANNED_PROMPT
-    } else {
-        "$SUBAGENTS_CANNED_PROMPT\n\n$normalized"
-    }
+    val directives = mutableListOf<String>()
+    directives.addAll(mentionedFiles.map { "@$it" })
+    directives.addAll(mentionedSkills.map { "${'$'}${it.name}" })
+    if (subagentsArmed) directives.add(SUBAGENTS_PROMPT)
+    armedReviewTarget?.let { directives.add("/review ${reviewTargetChipLabel(it)}") }
+    return (directives + input.trim()).filter { it.isNotBlank() }.joinToString("\n")
 }
 
-private fun middleClip(value: String, maxChars: Int): String {
-    if (value.length <= maxChars || maxChars < 8) {
-        return value
-    }
-    val keep = (maxChars - 1) / 2
-    val start = value.take(keep)
-    val end = value.takeLast(maxChars - keep - 1)
-    return "$start…$end"
+private fun reviewTargetChipLabel(target: ReviewTarget): String = when (target) {
+    ReviewTarget.UNCOMMITTED_CHANGES -> "review changes"
+    ReviewTarget.BASE_BRANCH -> "review base"
 }
 
-private fun Bitmap.toJpegDataUrl(quality: Int = 85): String {
+private fun compactRateLimitLabel(raw: String): String {
+    val cleaned = raw.removePrefix("Rate limit:").replace(" left", "").trim()
+    return cleaned.ifBlank { "Limits" }
+}
+
+private fun Bitmap.toJpegDataUrl(): String {
     val output = ByteArrayOutputStream()
-    compress(Bitmap.CompressFormat.JPEG, quality.coerceIn(30, 100), output)
-    val bytes = output.toByteArray()
-    val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-    return "data:image/jpeg;base64,$base64"
+    compress(Bitmap.CompressFormat.JPEG, 88, output)
+    val encoded = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
+    return "data:image/jpeg;base64,$encoded"
 }

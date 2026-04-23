@@ -56,6 +56,12 @@ bash ./run-local-remodex.sh --hostname 192.168.31.138 --port 9000
 ## UI and parity notes
 
 - Conversation UI should follow iOS structure, not generic Android cards.
+- Workspace shell is now organized iOS-first in one pass:
+  - principal header (`menu + centered title/subtitle + refresh + settings`)
+  - thread-scoped status strip
+  - timeline body with message scrubber
+  - single composer card with suggestion tray + accessory chips + runtime bar.
+- Keep the drawer wired through `SidebarDrawerContent` using its full callback contract (`onOpenThread`, `onStartThread`, git actions, archive group, disconnect). Do not reintroduce ad-hoc sidebar parameters.
 - Current intended timeline split:
   - user: right-aligned rounded bubble
   - assistant: plain prose block without heavy card chrome
