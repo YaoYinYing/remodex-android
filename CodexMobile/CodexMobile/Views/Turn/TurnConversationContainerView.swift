@@ -13,16 +13,21 @@ struct TurnConversationContainerView: View {
     let activeTurnID: String?
     let isThreadRunning: Bool
     let latestTurnTerminalState: CodexTurnTerminalState?
+    let completedTurnIDs: Set<String>
     let stoppedTurnIDs: Set<String>
     let assistantRevertStatesByMessageID: [String: AssistantRevertPresentation]
+    let planSessionSource: CodexPlanSessionSource?
+    let allowsAssistantPlanFallbackRecovery: Bool
+    let threadMessagesForPlanMatching: [CodexMessage]
     let errorMessage: String?
-    let connectionRecoveryAccessory: AnyView?
+    let composerRecoveryAccessory: AnyView?
     let shouldAnchorToAssistantResponse: Binding<Bool>
     let isScrolledToBottom: Binding<Bool>
     let isComposerFocused: Bool
     let isComposerAutocompletePresented: Bool
     let emptyState: AnyView
     let composer: AnyView
+    let structuredPromptReplacementComposer: ((CodexMessage) -> AnyView)?
     let repositoryLoadingToastOverlay: AnyView
     let usageToastOverlay: AnyView
     let isRepositoryLoadingToastVisible: Bool
@@ -40,21 +45,39 @@ struct TurnConversationContainerView: View {
     private var messageLayout: TimelineMessageLayout {
         guard lastMessageLayoutThreadID == threadID,
               lastMessageLayoutToken == timelineChangeToken else {
-            return Self.buildMessageLayout(from: messages)
+            return Self.buildMessageLayout(
+                from: messages,
+                planSessionSource: planSessionSource
+            )
         }
         return cachedMessageLayout
     }
 
-    // Avoids showing the generic "new chat" empty state behind a pinned plan-only accessory.
+    // Keeps accessory-only chats informative instead of showing a blank viewport.
     private var timelineEmptyState: AnyView {
-        guard messageLayout.pinnedTaskPlanMessage != nil,
-              messageLayout.timelineMessages.isEmpty else {
+        guard messageLayout.timelineMessages.isEmpty else {
             return emptyState
         }
-        return AnyView(
-            Color.clear
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        )
+
+        if messageLayout.activeStructuredPromptMessage != nil {
+            return AnyView(EmptyView())
+        }
+
+        if let pinnedTaskPlanMessage = messageLayout.pinnedTaskPlanMessage {
+            let snapshot = PlanAccessorySnapshot(message: pinnedTaskPlanMessage)
+            let summary = snapshot.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            return AnyView(
+                AccessoryBackedEmptyState(
+                    systemImage: snapshot.status.symbolName,
+                    tint: snapshot.status.tint,
+                    title: snapshot.status == .inProgress ? "Plan in progress" : "Plan ready",
+                    summary: summary.isEmpty ? "Codex has prepared a plan for this chat." : summary,
+                    detail: "Open the plan card above the composer to review the current steps."
+                )
+            )
+        }
+
+        return emptyState
     }
 
     // ─── ENTRY POINT ─────────────────────────────────────────────
@@ -67,11 +90,15 @@ struct TurnConversationContainerView: View {
                 activeTurnID: activeTurnID,
                 isThreadRunning: isThreadRunning,
                 latestTurnTerminalState: latestTurnTerminalState,
+                completedTurnIDs: completedTurnIDs,
                 stoppedTurnIDs: stoppedTurnIDs,
                 assistantRevertStatesByMessageID: assistantRevertStatesByMessageID,
+                planSessionSource: planSessionSource,
+                allowsAssistantPlanFallbackRecovery: allowsAssistantPlanFallbackRecovery,
+                threadMessagesForPlanMatching: threadMessagesForPlanMatching,
                 isRetryAvailable: !isThreadRunning,
                 errorMessage: errorMessage,
-                hidesErrorMessage: connectionRecoveryAccessory != nil,
+                hidesErrorMessage: composerRecoveryAccessory != nil,
                 shouldAnchorToAssistantResponse: shouldAnchorToAssistantResponse,
                 isScrolledToBottom: isScrolledToBottom,
                 isComposerFocused: isComposerFocused,
@@ -126,15 +153,21 @@ struct TurnConversationContainerView: View {
                 .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            if let connectionRecoveryAccessory {
-                connectionRecoveryAccessory
+            if let composerRecoveryAccessory {
+                composerRecoveryAccessory
                     .padding(.horizontal, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
 
-            composer
+            if let activeStructuredPromptMessage = messageLayout.activeStructuredPromptMessage,
+               let structuredPromptReplacementComposer {
+                structuredPromptReplacementComposer(activeStructuredPromptMessage)
+            } else {
+                composer
+            }
         }
         .animation(.easeInOut(duration: 0.18), value: messageLayout.pinnedTaskPlanMessage?.id)
+        .animation(.easeInOut(duration: 0.18), value: messageLayout.activeStructuredPromptMessage?.id)
     }
 
     // Rebuilds the plan/timeline split only when the thread or timeline token really changed.
@@ -147,28 +180,48 @@ struct TurnConversationContainerView: View {
 
         lastMessageLayoutThreadID = threadID
         lastMessageLayoutToken = timelineChangeToken
-        cachedMessageLayout = Self.buildMessageLayout(from: messages)
+        cachedMessageLayout = Self.buildMessageLayout(
+            from: messages,
+            planSessionSource: planSessionSource
+        )
     }
 
     // Separates pinned plan content from renderable timeline rows in one pass.
-    private static func buildMessageLayout(from messages: [CodexMessage]) -> TimelineMessageLayout {
+    private static func buildMessageLayout(
+        from messages: [CodexMessage],
+        planSessionSource: CodexPlanSessionSource?
+    ) -> TimelineMessageLayout {
         var timelineMessages: [CodexMessage] = []
         timelineMessages.reserveCapacity(messages.count)
         var pinnedTaskPlanMessage: CodexMessage?
+        var activeStructuredPromptMessage: CodexMessage?
+        let canReplaceComposerWithPrompt = planSessionSource?.isNative == true
 
         for message in messages {
             if message.shouldDisplayPinnedPlanAccessory {
                 pinnedTaskPlanMessage = message
+            } else if message.shouldDisplayInlinePlanResult {
+                timelineMessages.append(message)
             } else if message.isPlanSystemMessage {
                 continue
             } else {
                 timelineMessages.append(message)
+                if canReplaceComposerWithPrompt,
+                   message.shouldDisplayComposerStructuredPrompt {
+                    activeStructuredPromptMessage = message
+                }
             }
+        }
+
+        if let activeStructuredPromptMessage,
+           let activeIndex = timelineMessages.lastIndex(where: { $0.id == activeStructuredPromptMessage.id }) {
+            timelineMessages.remove(at: activeIndex)
         }
 
         return TimelineMessageLayout(
             timelineMessages: timelineMessages,
-            pinnedTaskPlanMessage: pinnedTaskPlanMessage
+            pinnedTaskPlanMessage: pinnedTaskPlanMessage,
+            activeStructuredPromptMessage: activeStructuredPromptMessage
         )
     }
 }
@@ -176,11 +229,58 @@ struct TurnConversationContainerView: View {
 private struct TimelineMessageLayout: Equatable {
     let timelineMessages: [CodexMessage]
     let pinnedTaskPlanMessage: CodexMessage?
+    let activeStructuredPromptMessage: CodexMessage?
 
     static let empty = TimelineMessageLayout(
         timelineMessages: [],
-        pinnedTaskPlanMessage: nil
+        pinnedTaskPlanMessage: nil,
+        activeStructuredPromptMessage: nil
     )
+}
+
+private struct AccessoryBackedEmptyState: View {
+    let systemImage: String
+    let tint: Color
+    let title: String
+    let summary: String
+    let detail: String
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            VStack(spacing: 14) {
+                Image(systemName: systemImage)
+                    .font(AppFont.system(size: 24, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 56, height: 56)
+                    .background(
+                        Circle()
+                            .fill(tint.opacity(0.12))
+                    )
+
+                Text(title)
+                    .font(AppFont.title3(weight: .semibold))
+                    .multilineTextAlignment(.center)
+
+                Text(summary)
+                    .font(AppFont.body())
+                    .foregroundStyle(.primary.opacity(0.9))
+                    .multilineTextAlignment(.center)
+
+                Text(detail)
+                    .font(AppFont.caption())
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: 320)
+            .padding(.horizontal, 24)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
 }
 
 extension CodexMessage {
@@ -190,7 +290,8 @@ extension CodexMessage {
 
     // Hides terminal 3/3-style plans so only genuinely active plans stay pinned above the composer.
     var shouldDisplayPinnedPlanAccessory: Bool {
-        guard isPlanSystemMessage else {
+        guard isPlanSystemMessage,
+              resolvedPlanPresentation?.isProgressAccessory == true else {
             return false
         }
 
@@ -204,5 +305,19 @@ extension CodexMessage {
         }
 
         return steps.contains { $0.status != .completed }
+    }
+
+    var shouldDisplayInlinePlanResult: Bool {
+        guard isPlanSystemMessage,
+              resolvedPlanPresentation?.isInlineResultVisible == true,
+              !shouldDisplayPinnedPlanAccessory else {
+            return false
+        }
+
+        return proposedPlan != nil
+    }
+
+    var shouldDisplayComposerStructuredPrompt: Bool {
+        role == .system && kind == .userInputPrompt && structuredUserInputRequest != nil
     }
 }

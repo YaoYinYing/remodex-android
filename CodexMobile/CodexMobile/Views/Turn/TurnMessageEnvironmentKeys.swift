@@ -1,7 +1,7 @@
 // FILE: TurnMessageEnvironmentKeys.swift
 // Purpose: SwiftUI environment keys for turn-scoped actions such as reconnect, inline commit/push, assistant revert, and subagent open.
 // Layer: View Support
-// Exports: EnvironmentValues.reconnectAction, EnvironmentValues.inlineCommitAndPushAction,
+// Exports: EnvironmentValues.reconnectAction, EnvironmentValues.wakeMacDisplayAction, EnvironmentValues.inlineCommitAndPushAction,
 //   EnvironmentValues.assistantRevertAction, EnvironmentValues.subagentOpenAction
 // Depends on: SwiftUI, CodexMessage
 
@@ -18,6 +18,17 @@ extension EnvironmentValues {
     }
 }
 
+private struct WakeMacDisplayActionKey: EnvironmentKey {
+    static let defaultValue: (() -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var wakeMacDisplayAction: (() -> Void)? {
+        get { self[WakeMacDisplayActionKey.self] }
+        set { self[WakeMacDisplayActionKey.self] = newValue }
+    }
+}
+
 private struct InlineCommitAndPushActionKey: EnvironmentKey {
     static let defaultValue: (() -> Void)? = nil
 }
@@ -26,6 +37,18 @@ extension EnvironmentValues {
     var inlineCommitAndPushAction: (() -> Void)? {
         get { self[InlineCommitAndPushActionKey.self] }
         set { self[InlineCommitAndPushActionKey.self] = newValue }
+    }
+}
+
+// Shares the current inline commit/push phase with timeline actions.
+private struct InlineCommitAndPushPhaseKey: EnvironmentKey {
+    static let defaultValue: InlineCommitAndPushPhase? = nil
+}
+
+extension EnvironmentValues {
+    var inlineCommitAndPushPhase: InlineCommitAndPushPhase? {
+        get { self[InlineCommitAndPushPhaseKey.self] }
+        set { self[InlineCommitAndPushPhaseKey.self] = newValue }
     }
 }
 
