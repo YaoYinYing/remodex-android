@@ -25,6 +25,7 @@ import com.remodex.mobile.ui.parity.LoggerScreen
 import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
 import com.remodex.mobile.ui.parity.PaywallScreen
+import com.remodex.mobile.ui.parity.ServiceWorkspaceActionHandler
 import com.remodex.mobile.ui.parity.WorkspaceScreen
 import com.remodex.mobile.ui.parity.WorkspaceSettingsScreen
 import com.remodex.mobile.ui.theme.AppFontStyle
@@ -119,6 +120,7 @@ fun RemodexApp(
     val loggerLevel = LoggerLevel.fromStorage(loggerLevelRaw)
     val loggerEntries by AppLogger.entries.collectAsState()
     val loggerSettings by AppLogger.settings.collectAsState()
+    val workspaceActions = remember(service) { ServiceWorkspaceActionHandler(service) }
     val initialPairing = remember(service) { service.currentPairing() }
 
     var relayUrl by rememberSaveable {
@@ -292,7 +294,7 @@ fun RemodexApp(
                 }
                 AppGate.WORKSPACE -> {
                     WorkspaceScreen(
-                        service = service,
+                        actions = workspaceActions,
                         connectionState = connectionState,
                         status = status,
                         currentProjectPath = currentProjectPath,

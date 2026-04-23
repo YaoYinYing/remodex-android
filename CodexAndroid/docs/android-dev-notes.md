@@ -57,6 +57,7 @@ bash ./run-local-remodex.sh --hostname 192.168.31.138 --port 9000
 ## UI and parity notes
 
 - Conversation UI should follow iOS structure, not generic Android cards.
+- Keep `WorkspaceScreen` on a feature action contract (`WorkspaceActionHandler`) instead of direct `CodexService` mutation calls. Service calls belong in controllers/handlers, not composables.
 - Workspace shell is now organized iOS-first in one pass:
   - principal header (`menu + centered title/subtitle + refresh + settings`)
   - thread-scoped status strip

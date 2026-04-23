@@ -71,7 +71,6 @@ import androidx.compose.ui.unit.dp
 import com.remodex.mobile.model.ThreadSummary
 import com.remodex.mobile.model.TimelineEntry
 import com.remodex.mobile.model.TimelineRole
-import com.remodex.mobile.service.CodexService
 import com.remodex.mobile.service.ConnectionState
 import com.remodex.mobile.service.FileAutocompleteMatch
 import com.remodex.mobile.service.PendingPermissionRequest
@@ -89,7 +88,7 @@ private const val SUBAGENTS_PROMPT =
 
 @Composable
 fun WorkspaceScreen(
-    service: CodexService,
+    actions: WorkspaceActionHandler,
     connectionState: ConnectionState,
     status: String,
     currentProjectPath: String,
@@ -193,12 +192,12 @@ fun WorkspaceScreen(
 
     LaunchedEffect(isConnected, selectedThreadId) {
         if (!isConnected) return@LaunchedEffect
-        runCatching { service.refreshThreads(silentStatus = true, includeTimeline = false) }
-        runCatching { service.refreshActiveThreadTimeline(silentStatus = true) }
-        runCatching { service.refreshGitStatus(silentStatus = true) }
-        runCatching { service.refreshRateLimitInfo(silentStatus = true) }
+        runCatching { actions.refreshThreads() }
+        runCatching { actions.refreshActiveThreadTimeline() }
+        runCatching { actions.refreshGitStatus() }
+        runCatching { actions.refreshRateLimitInfo() }
         if (!selectedThreadId.isNullOrBlank()) {
-            runCatching { service.reconcileThreadRunningState(selectedThreadId) }
+            runCatching { actions.reconcileThreadRunningState(selectedThreadId) }
         }
     }
 
@@ -206,12 +205,12 @@ fun WorkspaceScreen(
         when (val token = activeToken) {
             is ComposerAutocompleteToken.File -> {
                 val roots = listOfNotNull(selectedThread?.cwd, projectPath.takeIf { it.isNotBlank() }).distinct()
-                fileSuggestions = runCatching { service.fuzzyFileSearch(token.query, roots = roots, limit = 8) }.getOrDefault(emptyList())
+                fileSuggestions = runCatching { actions.fuzzyFileSearch(token.query, roots = roots, limit = 8) }.getOrDefault(emptyList())
                 skillSuggestions = emptyList()
             }
             is ComposerAutocompleteToken.Skill -> {
                 val roots = listOfNotNull(selectedThread?.cwd, projectPath.takeIf { it.isNotBlank() }).distinct()
-                skillSuggestions = runCatching { service.listSkills(cwds = roots, forceReload = false, limit = 8) }.getOrDefault(emptyList())
+                skillSuggestions = runCatching { actions.listSkills(cwds = roots, forceReload = false, limit = 8) }.getOrDefault(emptyList())
                 fileSuggestions = emptyList()
             }
             else -> {
@@ -260,7 +259,7 @@ fun WorkspaceScreen(
         val pendingText = text
         val pendingAttachments = mediaAttachments.toList()
         scope.launch {
-            runCatching { service.sendTurnStart(pendingText, attachments = pendingAttachments) }
+            runCatching { actions.sendTurnStart(pendingText, attachments = pendingAttachments) }
                 .onSuccess { clearComposer() }
                 .onFailure { error ->
                     attachmentHint = error.message?.takeIf { it.isNotBlank() } ?: "Send failed. Check connection logs."
@@ -283,42 +282,42 @@ fun WorkspaceScreen(
                     onOpenThread = { threadId ->
                         scope.launch {
                             drawerState.close()
-                            runCatching { service.openThread(threadId) }
+                            runCatching { actions.openThread(threadId) }
                         }
                     },
                     onStartThread = { projectHint ->
                         scope.launch {
                             drawerState.close()
-                            runCatching { service.startThread(preferredProjectPath = projectHint) }
+                            runCatching { actions.startThread(preferredProjectPath = projectHint) }
                         }
                     },
                     rateLimitInfo = rateLimitInfo,
                     ciStatus = ciStatus,
                     autoRefreshEnabled = isConnected,
                     onAutoRefreshChanged = { _ -> },
-                    onRefreshWorkspace = { scope.launch { service.forceRefreshWorkspace() } },
+                    onRefreshWorkspace = { scope.launch { actions.forceRefreshWorkspace() } },
                     onOpenSettings = {
                         scope.launch { drawerState.close() }
                         onOpenSettings()
                     },
                     onGitDiff = {
                         scope.launch {
-                            diffPatch = runCatching { service.gitDiff() }.getOrElse { it.message ?: "Diff unavailable." }
+                            diffPatch = runCatching { actions.gitDiff() }.getOrElse { it.message ?: "Diff unavailable." }
                             showDiffDialog = true
                         }
                     },
                     onGitCommit = { showCommitDialog = true },
-                    onGitCommitAndPush = { scope.launch { service.gitCommitAndPush(null) } },
-                    onGitPull = { scope.launch { service.gitPull() } },
-                    onGitPush = { scope.launch { service.gitPush() } },
-                    onArchiveThread = { threadId -> scope.launch { service.archiveThread(threadId) } },
-                    onUnarchiveThread = { threadId -> scope.launch { service.unarchiveThread(threadId) } },
-                    onDeleteThreadLocally = { threadId -> scope.launch { service.deleteThreadLocally(threadId) } },
-                    onArchiveProjectGroup = { ids -> scope.launch { service.archiveThreadGroup(ids) } },
-                    onRenameThread = { threadId, title -> scope.launch { service.renameThread(threadId, title) } },
+                    onGitCommitAndPush = { scope.launch { actions.gitCommitAndPush(null) } },
+                    onGitPull = { scope.launch { actions.gitPull() } },
+                    onGitPush = { scope.launch { actions.gitPush() } },
+                    onArchiveThread = { threadId -> scope.launch { actions.archiveThread(threadId) } },
+                    onUnarchiveThread = { threadId -> scope.launch { actions.unarchiveThread(threadId) } },
+                    onDeleteThreadLocally = { threadId -> scope.launch { actions.deleteThreadLocally(threadId) } },
+                    onArchiveProjectGroup = { ids -> scope.launch { actions.archiveThreadGroup(ids) } },
+                    onRenameThread = { threadId, title -> scope.launch { actions.renameThread(threadId, title) } },
                     onDisconnect = {
                         scope.launch {
-                            service.disconnect()
+                            actions.disconnect()
                             onOpenPairing()
                         }
                     }
@@ -338,7 +337,7 @@ fun WorkspaceScreen(
                     subtitle = selectedThread?.cwd ?: projectPath.ifBlank { status },
                     connectionState = connectionState,
                     onOpenSidebar = { scope.launch { drawerState.open() } },
-                    onRefresh = { scope.launch { service.forceRefreshWorkspace() } },
+                    onRefresh = { scope.launch { actions.forceRefreshWorkspace() } },
                     onOpenSettings = onOpenSettings,
                     onHeaderTap = onHeaderTap
                 )
@@ -347,20 +346,20 @@ fun WorkspaceScreen(
                     EmptyWorkspaceHome(
                         connectionState = connectionState,
                         status = status,
-                        trustedPairLabel = service.currentPairing()?.macDeviceId,
+                        trustedPairLabel = actions.currentPairingMacDeviceId(),
                         projectPath = projectPath.takeIf { it.isNotBlank() },
                         rateLimitInfo = rateLimitInfo,
                         ciStatus = ciStatus,
                         onOpenSidebar = { scope.launch { drawerState.open() } },
                         onOpenPairing = onOpenPairing,
-                        onReconnect = { scope.launch { service.reconnect() } },
+                        onReconnect = { scope.launch { actions.reconnect() } },
                         onForgetPair = {
                             scope.launch {
-                                service.disconnect()
+                                actions.disconnect()
                                 onOpenPairing()
                             }
                         },
-                        onStartThread = { scope.launch { service.startThread() } }
+                        onStartThread = { scope.launch { actions.startThread() } }
                     )
                 } else {
                     WorkspaceStatusStrip(
@@ -370,13 +369,13 @@ fun WorkspaceScreen(
                         ciStatus = ciStatus,
                         branch = checkoutBranch,
                         onOpenGit = { showGitDialog = true },
-                        onCheckRateLimits = { scope.launch { service.refreshRateLimitInfo(silentStatus = false) } }
+                        onCheckRateLimits = { scope.launch { actions.refreshRateLimitInfo() } }
                     )
 
                     PendingPermissionStrip(
                         pendingPermissions = pendingPermissions,
-                        onGrant = { id -> scope.launch { service.grantPermission(id, allow = true) } },
-                        onDeny = { id -> scope.launch { service.grantPermission(id, allow = false) } }
+                        onGrant = { id -> scope.launch { actions.grantPermission(id, allow = true) } },
+                        onDeny = { id -> scope.launch { actions.grantPermission(id, allow = false) } }
                     )
 
                     voiceRecoverySnapshot?.let { snapshot ->
@@ -429,14 +428,14 @@ fun WorkspaceScreen(
                 showReviewTargets = showReviewTargets,
                 showForkTargets = showForkTargets,
                 isDispatching = isDispatching,
-                isRunning = selectedThreadId != null && service.isThreadRunning(selectedThreadId),
+                isRunning = selectedThreadId != null && actions.isThreadRunning(selectedThreadId),
                 onQueuePausedChange = { queuePaused = it },
                 onSwitchModel = onSwitchModel,
                 onSwitchReasoningEffort = onSwitchReasoningEffort,
                 onAttachGallery = { galleryPicker.launch("image/*") },
                 onAttachCamera = { cameraLauncher.launch(null) },
                 onVoice = onTriggerVoiceRecovery,
-                onCheckRateLimits = { scope.launch { service.refreshRateLimitInfo(silentStatus = false) } },
+                onCheckRateLimits = { scope.launch { actions.refreshRateLimitInfo() } },
                 onSelectFile = { token, match ->
                     onComposerInputChange(applyComposerAutocompleteSelection(composerInput, token, match.path))
                     mentionedFiles.add(match.path)
@@ -447,7 +446,7 @@ fun WorkspaceScreen(
                 },
                 onSelectCommand = { command ->
                     when (command.token) {
-                        "/status" -> scope.launch { service.forceRefreshWorkspace() }
+                        "/status" -> scope.launch { actions.forceRefreshWorkspace() }
                         "/subagents" -> subagentsArmed = true
                         "/review" -> showReviewTargets = true
                         "/fork" -> showForkTargets = true
@@ -465,12 +464,12 @@ fun WorkspaceScreen(
                 onDismissReviewTargets = { showReviewTargets = false },
                 onForkLocal = {
                     showForkTargets = false
-                    scope.launch { service.threadFork() }
+                    scope.launch { actions.threadFork() }
                 },
                 onForkWorktree = {
                     showForkTargets = false
                     scope.launch {
-                        service.threadFork(
+                        actions.threadFork(
                             targetProjectPath = selectedThread?.cwd?.takeIf { it.isNotBlank() } ?: projectPath.takeIf { it.isNotBlank() }
                         )
                     }
@@ -483,7 +482,7 @@ fun WorkspaceScreen(
                 onRemoveQueuedDraft = { queuedDrafts.remove(it) },
                 onClearQueue = { queuedDrafts.clear() },
                 onSend = { dispatchMessage() },
-                onStop = { scope.launch { service.interruptActiveTurn() } }
+                onStop = { scope.launch { actions.interruptActiveTurn() } }
             )
         }
     }
@@ -495,14 +494,14 @@ fun WorkspaceScreen(
             gitStatusSummary = gitActionStatus ?: gitStatusSummary,
             onBranchSelected = { branch ->
                 onCheckoutBranchChange(branch)
-                scope.launch { service.checkoutGitBranch(branch) }
+                scope.launch { actions.checkoutGitBranch(branch) }
             },
-            onPull = { scope.launch { service.gitPull() } },
-            onPush = { scope.launch { service.gitPush() } },
+            onPull = { scope.launch { actions.gitPull() } },
+            onPush = { scope.launch { actions.gitPush() } },
             onCommit = { showCommitDialog = true },
             onDiff = {
                 scope.launch {
-                    diffPatch = runCatching { service.gitDiff() }.getOrElse { it.message ?: "Diff unavailable." }
+                    diffPatch = runCatching { actions.gitDiff() }.getOrElse { it.message ?: "Diff unavailable." }
                     showDiffDialog = true
                 }
             },
@@ -519,7 +518,7 @@ fun WorkspaceScreen(
             onDismiss = { showCommitDialog = false },
             onCommit = {
                 scope.launch {
-                    service.gitCommitAndPush(commitMessage.takeIf { it.isNotBlank() })
+                    actions.gitCommitAndPush(commitMessage.takeIf { it.isNotBlank() })
                     commitMessage = ""
                     showCommitDialog = false
                 }

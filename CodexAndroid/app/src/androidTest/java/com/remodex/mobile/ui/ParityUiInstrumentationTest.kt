@@ -23,6 +23,7 @@ import com.remodex.mobile.service.PairingPayload
 import com.remodex.mobile.service.transport.ScriptedRpcTransport
 import com.remodex.mobile.ui.parity.OnboardingScreen
 import com.remodex.mobile.ui.parity.PairingScreen
+import com.remodex.mobile.ui.parity.ServiceWorkspaceActionHandler
 import com.remodex.mobile.ui.parity.TodoRow
 import com.remodex.mobile.ui.parity.WebsiteFeatureTodos
 import com.remodex.mobile.ui.parity.WorkspaceScreen
@@ -88,10 +89,11 @@ class ParityUiInstrumentationTest {
     @Test
     fun workspaceDrawerAndRefreshControlsAreInteractive() {
         val service = CodexService()
+        val actions = ServiceWorkspaceActionHandler(service)
         composeRule.setContent {
             RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_LIGHT) {
                 WorkspaceScreen(
-                    service = service,
+                    actions = actions,
                     connectionState = ConnectionState.Connected,
                     status = "Connected",
                     currentProjectPath = "/Users/yyy/Documents/protein_design/remodex",
@@ -134,12 +136,13 @@ class ParityUiInstrumentationTest {
     @Test
     fun workspaceSettingsRouteOpensFromDrawer() {
         val service = CodexService()
+        val actions = ServiceWorkspaceActionHandler(service)
         var openSettingsInvoked = false
 
         composeRule.setContent {
             RemodexTheme(fontStyle = AppFontStyle.GEIST, toneMode = AppToneMode.FORCE_LIGHT) {
                 WorkspaceScreen(
-                    service = service,
+                    actions = actions,
                     connectionState = ConnectionState.Connected,
                     status = "Connected",
                     currentProjectPath = "/Users/yyy/Documents/protein_design/remodex",
@@ -237,6 +240,7 @@ class ParityUiInstrumentationTest {
 
     @Composable
     private fun ScriptedWorkspaceHarness(service: CodexService) {
+        val actions = remember(service) { ServiceWorkspaceActionHandler(service) }
         val threads by service.threads.collectAsState()
         val selectedThreadId by service.selectedThreadId.collectAsState()
         val timeline by service.timeline.collectAsState()
@@ -255,7 +259,7 @@ class ParityUiInstrumentationTest {
         var composerInput by remember { mutableStateOf("Inject mocked Codex response from emulator test.") }
 
         WorkspaceScreen(
-            service = service,
+            actions = actions,
             connectionState = ConnectionState.Connected,
             status = status,
             currentProjectPath = currentProjectPath,

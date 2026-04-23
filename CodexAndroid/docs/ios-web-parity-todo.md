@@ -67,6 +67,8 @@ Completion rule:
 - `RpcTransportParser` upgraded to emit typed kinds and parse command/plan/subagent metadata.
 - `CodexService` notification reducer upgraded for typed entries and structured-user-input row creation.
 - Parser unit tests extended for kind decoding and command/plan metadata.
+- Added `WorkspaceActionHandler` + `ServiceWorkspaceActionHandler` and rewired `WorkspaceScreen` to use feature action contracts rather than direct `CodexService` calls.
+- Updated app-shell and instrumentation harnesses to pass the workspace action handler through `RemodexApp` and scripted UI tests.
 - Workspace refresh loop refactored from perpetual 4-second polling to one-shot hydration on connect/thread change to reduce desktop refresh churn.
 - Composer dispatch now preserves draft/attachments on send failure and only clears after successful `turn/start`.
 - `turn/start` runtime fallback order updated to iOS-aligned priority (`on-request|onRequest` workspace write before `never` full-access fallback).
@@ -77,6 +79,7 @@ Completion rule:
 
 - `./gradlew -g /Users/yyy/.gradle :app:compileDebugKotlin`
 - `./gradlew -g /Users/yyy/.gradle :app:testDebugUnitTest --tests com.remodex.mobile.service.transport.RpcTransportParserTest`
+- `./gradlew -g /Users/yyy/.gradle :app:testDebugUnitTest`
 - `./gradlew -g /Users/yyy/.gradle :app:installDebug`
 - `ifconfig en0`
 - `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:42567 --skip-build --wait-seconds 80`
