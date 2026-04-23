@@ -1,6 +1,7 @@
 package com.remodex.mobile.service.transport
 
 import com.remodex.mobile.model.TimelineRole
+import com.remodex.mobile.model.TimelineEntryKind
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -129,10 +130,13 @@ class RpcTransportParserTest {
         assertEquals(3, timeline.size)
         assertEquals(TimelineRole.USER, timeline[0].role)
         assertEquals("hello", timeline[0].text)
+        assertEquals(TimelineEntryKind.CHAT, timeline[0].kind)
         assertEquals(TimelineRole.ASSISTANT, timeline[1].role)
         assertEquals("world", timeline[1].text)
+        assertEquals(TimelineEntryKind.CHAT, timeline[1].kind)
         assertEquals(TimelineRole.SYSTEM, timeline[2].role)
         assertTrue(timeline[2].text.contains("thinking"))
+        assertEquals(TimelineEntryKind.THINKING, timeline[2].kind)
     }
 
     @Test
@@ -179,5 +183,55 @@ class RpcTransportParserTest {
         assertEquals("openai", child.modelProvider)
         assertTrue(child.isSubagent)
         assertTrue(child.isForkedThread)
+    }
+
+    @Test
+    fun parseTimelineEntryDecodesCommandExecutionAndPlanKinds() {
+        val commandItem = JsonObject(
+            mapOf(
+                "id" to JsonPrimitive("cmd-1"),
+                "type" to JsonPrimitive("command_execution"),
+                "command" to JsonPrimitive("git status"),
+                "status" to JsonPrimitive("running"),
+                "text" to JsonPrimitive("Command: git status")
+            )
+        )
+        val planItem = JsonObject(
+            mapOf(
+                "id" to JsonPrimitive("plan-1"),
+                "type" to JsonPrimitive("plan"),
+                "explanation" to JsonPrimitive("Do the work"),
+                "steps" to JsonArray(
+                    listOf(
+                        JsonObject(
+                            mapOf(
+                                "id" to JsonPrimitive("s1"),
+                                "step" to JsonPrimitive("Refactor timeline"),
+                                "status" to JsonPrimitive("in_progress")
+                            )
+                        )
+                    )
+                )
+            )
+        )
+
+        val parsedCommand = parser.parseTimelineEntry(
+            threadId = "thread-1",
+            turnId = "turn-1",
+            itemObject = commandItem
+        )
+        val parsedPlan = parser.parseTimelineEntry(
+            threadId = "thread-1",
+            turnId = "turn-1",
+            itemObject = planItem
+        )
+
+        requireNotNull(parsedCommand)
+        requireNotNull(parsedPlan)
+        assertEquals(TimelineEntryKind.COMMAND_EXECUTION, parsedCommand.kind)
+        assertEquals("git status", parsedCommand.commandExecution?.command)
+        assertEquals(TimelineEntryKind.PLAN, parsedPlan.kind)
+        assertEquals("Do the work", parsedPlan.planState?.explanation)
+        assertEquals(1, parsedPlan.planState?.steps?.size)
     }
 }

@@ -7,6 +7,7 @@ Purpose: keep Android-specific implementation constraints and known-good behavio
 - Mirror iOS behavior first. Use the iOS turn/timeline/composer implementation as the product source of truth before inventing Android-specific behavior.
 - For current parity scope, the canonical checklist is [ios-web-parity-todo.md](/Users/yyy/Documents/protein_design/remodex/CodexAndroid/docs/ios-web-parity-todo.md).
 - Prefer shared/service fixes over view-local workarounds.
+- For this refactor track, do not do patch-on-patch hotfixes; replace modules coherently (parser/reducer/view slices) and retire obsolete paths in the same change.
 - Whether the user explicitly asks or not, always finish with commit and push, do not stop at implementation or validation; carry the change through commit and `git push`.
 
 ## Runtime and transport

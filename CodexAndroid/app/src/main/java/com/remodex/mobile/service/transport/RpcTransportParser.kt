@@ -1,8 +1,14 @@
 package com.remodex.mobile.service.transport
 
 import com.remodex.mobile.model.ThreadSummary
+import com.remodex.mobile.model.TimelineCommandExecutionDetails
 import com.remodex.mobile.model.TimelineEntry
+import com.remodex.mobile.model.TimelineEntryKind
+import com.remodex.mobile.model.TimelinePlanState
+import com.remodex.mobile.model.TimelinePlanStep
 import com.remodex.mobile.model.TimelineRole
+import com.remodex.mobile.model.TimelineSubagentAction
+import com.remodex.mobile.model.TimelineSubagentThreadPresentation
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -40,36 +46,12 @@ class RpcTransportParser {
 
             for ((itemIndex, itemElement) in items.withIndex()) {
                 val itemObject = itemElement as? JsonObject ?: continue
-                val normalizedType = normalizeItemType(itemObject.string("type"))
-                if (normalizedType.isEmpty()) {
-                    continue
-                }
-
-                val text = parseItemText(itemObject)
-                if (text.isBlank()) {
-                    continue
-                }
-
-                val role = when (normalizedType) {
-                    "usermessage" -> TimelineRole.USER
-                    "agentmessage", "assistantmessage" -> TimelineRole.ASSISTANT
-                    "message" -> {
-                        val messageRole = itemObject.string("role").orEmpty().lowercase()
-                        if (messageRole.contains("user")) TimelineRole.USER else TimelineRole.ASSISTANT
-                    }
-                    else -> TimelineRole.SYSTEM
-                }
-
-                val fallbackId = "item-${turnIndex + 1}-${itemIndex + 1}"
-                val itemId = itemObject.string("id") ?: fallbackId
-                output += TimelineEntry(
-                    id = itemId,
+                parseTimelineEntry(
                     threadId = threadId,
                     turnId = turnId,
-                    type = normalizedType,
-                    role = role,
-                    text = text
-                )
+                    itemObject = itemObject,
+                    fallbackId = "item-${turnIndex + 1}-${itemIndex + 1}"
+                )?.let(output::add)
             }
         }
 
@@ -106,13 +88,22 @@ class RpcTransportParser {
             else -> TimelineRole.SYSTEM
         }
 
+        val kind = resolveTimelineKind(normalizedType)
         return TimelineEntry(
             id = itemObject.string("id") ?: fallbackId,
             threadId = threadId,
             turnId = turnId,
             type = normalizedType,
             role = role,
-            text = text
+            text = text,
+            kind = kind,
+            commandExecution = if (kind == TimelineEntryKind.COMMAND_EXECUTION) {
+                parseCommandExecutionDetails(itemObject = itemObject, fallbackText = text)
+            } else {
+                null
+            },
+            planState = if (kind == TimelineEntryKind.PLAN) parsePlanState(itemObject) else null,
+            subagentAction = if (kind == TimelineEntryKind.SUBAGENT_ACTION) parseSubagentAction(itemObject) else null
         )
     }
 
@@ -185,43 +176,128 @@ class RpcTransportParser {
             return direct
         }
 
-        val enteredReview = normalizeItemType(itemObject.string("type"))
-        if (enteredReview == "enteredreviewmode") {
-            return "Reviewing changes..."
+        return when (normalizeItemType(itemObject.string("type"))) {
+            "enteredreviewmode" -> "Reviewing changes..."
+            "contextcompaction" -> "Context compacted"
+            "plan" -> itemObject.string("title", "summary", "status") ?: "Plan updated."
+            "reasoning" -> itemObject.string("summary", "title") ?: "Thinking..."
+            "toolcall" -> {
+                val tool = itemObject.string("tool", "name", "command")
+                if (tool.isNullOrBlank()) "Tool call updated." else "Tool call: $tool"
+            }
+            "filechange" -> {
+                val path = itemObject.string("path", "file", "relativePath", "relative_path")
+                if (path.isNullOrBlank()) "File changes updated." else "File change: $path"
+            }
+            "commandexecution" -> {
+                val command = itemObject.string("command", "title", "summary")
+                if (command.isNullOrBlank()) "Command execution updated." else "Command: $command"
+            }
+            "diff" -> "Diff updated."
+            else -> ""
+        }
+    }
+
+    fun resolveTimelineKind(normalizedType: String): TimelineEntryKind {
+        return when (normalizedType) {
+            "usermessage", "assistantmessage", "agentmessage", "message" -> TimelineEntryKind.CHAT
+            "reasoning" -> TimelineEntryKind.THINKING
+            "filechange", "diff" -> TimelineEntryKind.FILE_CHANGE
+            "commandexecution", "execcommandbegin", "execcommandoutputdelta", "execcommandend" -> {
+                TimelineEntryKind.COMMAND_EXECUTION
+            }
+            "toolcall" -> TimelineEntryKind.TOOL_ACTIVITY
+            "plan", "turnplanupdated", "itemplandelta" -> TimelineEntryKind.PLAN
+            "collabagenttoolcall", "collabtoolcall", "spawnagent", "waitagent", "resumeagent", "closeagent", "sendinput" -> {
+                TimelineEntryKind.SUBAGENT_ACTION
+            }
+            "requestuserinput" -> TimelineEntryKind.USER_INPUT_PROMPT
+            else -> TimelineEntryKind.CHAT
+        }
+    }
+
+    private fun parseCommandExecutionDetails(
+        itemObject: JsonObject,
+        fallbackText: String
+    ): TimelineCommandExecutionDetails {
+        val command = itemObject.string("command", "cmd", "raw_command", "rawCommand", "title", "summary")
+            ?: fallbackText.lineSequence().firstOrNull()?.trim().orEmpty().ifEmpty { "command" }
+        return TimelineCommandExecutionDetails(
+            command = command,
+            cwd = itemObject.string("cwd", "working_directory", "current_working_directory"),
+            status = itemObject.string("status", "phase", "state"),
+            output = itemObject.string("output", "stdout", "stderr", "delta"),
+            exitCode = itemObject.int("exitCode", "exit_code"),
+            durationMs = itemObject.int("durationMs", "duration_ms")
+        )
+    }
+
+    private fun parsePlanState(itemObject: JsonObject): TimelinePlanState? {
+        val explanation = itemObject.string("explanation", "summary", "title")
+        val rawSteps = (itemObject["steps"] as? JsonArray)
+            ?: ((itemObject["plan"] as? JsonObject)?.get("steps") as? JsonArray)
+        val steps = rawSteps?.mapNotNull { stepElement ->
+            val stepObject = stepElement as? JsonObject ?: return@mapNotNull null
+            val stepText = stepObject.string("step") ?: return@mapNotNull null
+            TimelinePlanStep(
+                id = stepObject.string("id") ?: "step-${stepText.hashCode()}",
+                step = stepText,
+                status = stepObject.string("status") ?: "pending"
+            )
+        }.orEmpty()
+        if (explanation.isNullOrBlank() && steps.isEmpty()) {
+            return null
+        }
+        return TimelinePlanState(explanation = explanation, steps = steps)
+    }
+
+    private fun parseSubagentAction(itemObject: JsonObject): TimelineSubagentAction? {
+        val tool = itemObject.string("tool", "tool_name", "toolName", "name")
+            ?: itemObject.string("type")
+            ?: return null
+        val status = itemObject.string("status", "state") ?: "running"
+        val receiverIds = (itemObject["receiverThreadIds"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { value -> value.isNotEmpty() } }
+            .orEmpty()
+        val receiverAgents = (itemObject["receiverAgents"] as? JsonArray)
+            ?.mapNotNull { agentElement ->
+                val agentObject = agentElement as? JsonObject ?: return@mapNotNull null
+                val threadId = agentObject.string("threadId", "thread_id") ?: return@mapNotNull null
+                TimelineSubagentThreadPresentation(
+                    threadId = threadId,
+                    agentId = agentObject.string("agentId", "agent_id"),
+                    nickname = agentObject.string("nickname", "agentNickname", "agent_nickname"),
+                    role = agentObject.string("role", "agentRole", "agent_role"),
+                    model = agentObject.string("model"),
+                    fallbackStatus = agentObject.string("status", "state"),
+                    fallbackMessage = agentObject.string("message")
+                )
+            }
+            .orEmpty()
+
+        val agents = if (receiverAgents.isNotEmpty()) {
+            receiverAgents
+        } else {
+            receiverIds.map { threadId ->
+                TimelineSubagentThreadPresentation(
+                    threadId = threadId,
+                    agentId = null,
+                    nickname = null,
+                    role = null,
+                    model = null,
+                    fallbackStatus = null,
+                    fallbackMessage = null
+                )
+            }
         }
 
-        if (enteredReview == "contextcompaction") {
-            return "Context compacted"
-        }
-
-        if (enteredReview == "plan") {
-            return itemObject.string("title", "summary", "status") ?: "Plan updated."
-        }
-
-        if (enteredReview == "reasoning") {
-            return itemObject.string("summary", "title") ?: "Thinking..."
-        }
-
-        if (enteredReview == "toolcall") {
-            val tool = itemObject.string("tool", "name", "command")
-            return if (tool.isNullOrBlank()) "Tool call updated." else "Tool call: $tool"
-        }
-
-        if (enteredReview == "filechange") {
-            val path = itemObject.string("path", "file", "relativePath", "relative_path")
-            return if (path.isNullOrBlank()) "File changes updated." else "File change: $path"
-        }
-
-        if (enteredReview == "commandexecution") {
-            val command = itemObject.string("command", "title", "summary")
-            return if (command.isNullOrBlank()) "Command execution updated." else "Command: $command"
-        }
-
-        if (enteredReview == "diff") {
-            return "Diff updated."
-        }
-
-        return ""
+        return TimelineSubagentAction(
+            tool = tool,
+            status = status,
+            prompt = itemObject.string("prompt", "message"),
+            model = itemObject.string("model"),
+            agents = agents
+        )
     }
 
     private fun normalizeItemType(value: String?): String {
@@ -270,6 +346,18 @@ class RpcTransportParser {
                     else -> Unit
                 }
             }
+        }
+        return null
+    }
+
+    private fun JsonObject.int(vararg keys: String): Int? {
+        for (key in keys) {
+            val primitive = this[key] as? JsonPrimitive ?: continue
+            val value = primitive.contentOrNull?.trim().orEmpty()
+            if (value.isEmpty()) {
+                continue
+            }
+            value.toIntOrNull()?.let { return it }
         }
         return null
     }

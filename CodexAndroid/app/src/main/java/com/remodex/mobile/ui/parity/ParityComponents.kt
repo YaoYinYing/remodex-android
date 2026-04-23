@@ -43,8 +43,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.remodex.mobile.model.ThreadSummary
+import com.remodex.mobile.model.TimelineEntryKind
 import com.remodex.mobile.model.TimelineEntry
 import com.remodex.mobile.model.TimelineRole
+import com.remodex.mobile.model.summaryText
 import com.remodex.mobile.service.PendingPermissionRequest
 import com.remodex.mobile.service.ServiceEvent
 import com.remodex.mobile.service.ConnectionState
@@ -652,15 +654,17 @@ private fun ThreadMetadataBadge(label: String) {
 @Composable
 fun TimelineRow(item: TimelineEntry) {
     val normalizedType = item.type.trim().lowercase()
-    val isCommandLike = normalizedType.contains("command")
-    val isVerboseType = isCommandLike
-        || normalizedType.contains("reasoning")
-        || normalizedType.contains("tool")
-        || normalizedType.contains("plan")
-        || normalizedType.contains("diff")
-        || normalizedType.contains("filechange")
+    val isCommandLike = item.kind == TimelineEntryKind.COMMAND_EXECUTION || normalizedType.contains("command")
+    val isVerboseType = item.kind in setOf(
+        TimelineEntryKind.THINKING,
+        TimelineEntryKind.TOOL_ACTIVITY,
+        TimelineEntryKind.PLAN,
+        TimelineEntryKind.FILE_CHANGE,
+        TimelineEntryKind.COMMAND_EXECUTION,
+        TimelineEntryKind.SUBAGENT_ACTION
+    )
     val textLineCount = remember(item.text) { item.text.count { it == '\n' } + 1 }
-    val shouldDefaultCollapse = remember(item.id, item.text, normalizedType) {
+    val shouldDefaultCollapse = remember(item.id, item.text, normalizedType, item.kind) {
         isVerboseType || item.text.length > 280 || textLineCount > 5
     }
     var expanded by rememberSaveable(item.id) { mutableStateOf(!shouldDefaultCollapse) }
@@ -688,6 +692,7 @@ fun TimelineRow(item: TimelineEntry) {
             onToggleExpanded = { expanded = !expanded }
         )
         TimelineRole.SYSTEM -> SystemTimelineBlock(
+            kind = item.kind,
             normalizedType = normalizedType,
             rawType = item.type,
             text = item.text,
@@ -696,7 +701,9 @@ fun TimelineRow(item: TimelineEntry) {
             expanded = expanded,
             shouldDefaultCollapse = shouldDefaultCollapse,
             collapsedMaxLines = collapsedMaxLines,
-            onToggleExpanded = { expanded = !expanded }
+            onToggleExpanded = { expanded = !expanded },
+            subagentSummary = item.subagentAction?.summaryText(),
+            structuredPrompt = item.structuredUserInputRequest?.questions?.firstOrNull()?.question
         )
     }
 }
@@ -775,6 +782,7 @@ private fun AssistantTimelineBlock(
 
 @Composable
 private fun SystemTimelineBlock(
+    kind: TimelineEntryKind,
     normalizedType: String,
     rawType: String,
     text: String,
@@ -783,7 +791,9 @@ private fun SystemTimelineBlock(
     expanded: Boolean,
     shouldDefaultCollapse: Boolean,
     collapsedMaxLines: Int,
-    onToggleExpanded: () -> Unit
+    onToggleExpanded: () -> Unit,
+    subagentSummary: String?,
+    structuredPrompt: String?
 ) {
     val diffEntries = remember(text, normalizedType) {
         if (normalizedType.contains("diff") || normalizedType.contains("filechange")) {
@@ -792,26 +802,48 @@ private fun SystemTimelineBlock(
             emptyList()
         }
     }
-    val accent = when {
-        normalizedType.contains("plan") -> PlanAccent
-        normalizedType.contains("reasoning") -> AlertAmber
-        normalizedType.contains("tool") || normalizedType.contains("command") -> CommandAccent
-        normalizedType.contains("diff") || normalizedType.contains("filechange") -> MaterialTheme.colorScheme.tertiary
+    val accent = when (kind) {
+        TimelineEntryKind.PLAN -> PlanAccent
+        TimelineEntryKind.THINKING -> AlertAmber
+        TimelineEntryKind.TOOL_ACTIVITY,
+        TimelineEntryKind.COMMAND_EXECUTION,
+        TimelineEntryKind.SUBAGENT_ACTION -> CommandAccent
+        TimelineEntryKind.FILE_CHANGE -> MaterialTheme.colorScheme.tertiary
+        TimelineEntryKind.USER_INPUT_PROMPT -> AlertAmber
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    val label = when {
-        normalizedType.contains("plan") -> "Plan"
-        normalizedType.contains("reasoning") -> "Thinking..."
-        normalizedType.contains("tool") -> "Tool activity"
-        normalizedType.contains("command") -> "Command"
-        normalizedType.contains("filechange") -> "File changes"
-        normalizedType.contains("diff") -> "Diff"
+    val label = when (kind) {
+        TimelineEntryKind.PLAN -> "Plan"
+        TimelineEntryKind.THINKING -> "Thinking..."
+        TimelineEntryKind.TOOL_ACTIVITY -> "Tool activity"
+        TimelineEntryKind.COMMAND_EXECUTION -> "Command"
+        TimelineEntryKind.FILE_CHANGE -> "File changes"
+        TimelineEntryKind.SUBAGENT_ACTION -> "Subagents"
+        TimelineEntryKind.USER_INPUT_PROMPT -> "Input required"
         else -> rawType.ifBlank { "System" }
     }
 
-    val isThinking = normalizedType.contains("reasoning")
-    val isToolActivity = normalizedType.contains("tool") && !isCommandLike
+    val isThinking = kind == TimelineEntryKind.THINKING
+    val isToolActivity = kind == TimelineEntryKind.TOOL_ACTIVITY
     val showCollapsedCommandPreview = isCommandLike && shouldDefaultCollapse && !expanded && firstLinePreview.isNotBlank()
+
+    if (kind == TimelineEntryKind.SUBAGENT_ACTION) {
+        InlineStatusCard(
+            title = label,
+            body = subagentSummary ?: text,
+            accent = accent
+        )
+        return
+    }
+
+    if (kind == TimelineEntryKind.USER_INPUT_PROMPT) {
+        InlineStatusCard(
+            title = label,
+            body = structuredPrompt ?: text,
+            accent = accent
+        )
+        return
+    }
 
     if (isThinking || isToolActivity) {
         Column(

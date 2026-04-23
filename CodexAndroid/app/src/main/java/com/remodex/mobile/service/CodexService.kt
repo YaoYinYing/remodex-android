@@ -3,7 +3,17 @@ package com.remodex.mobile.service
 import com.remodex.mobile.model.RpcMessage
 import com.remodex.mobile.model.RpcError
 import com.remodex.mobile.model.ThreadSummary
+import com.remodex.mobile.model.TimelineDeliveryState
 import com.remodex.mobile.model.TimelineEntry
+import com.remodex.mobile.model.TimelineEntryKind
+import com.remodex.mobile.model.TimelinePlanState
+import com.remodex.mobile.model.TimelinePlanStep
+import com.remodex.mobile.model.TimelineRole
+import com.remodex.mobile.model.TimelineStructuredInputOption
+import com.remodex.mobile.model.TimelineStructuredInputQuestion
+import com.remodex.mobile.model.TimelineStructuredUserInputRequest
+import com.remodex.mobile.model.TimelineSubagentAction
+import com.remodex.mobile.model.TimelineSubagentThreadPresentation
 import com.remodex.mobile.model.normalizeFilesystemProjectPath
 import com.remodex.mobile.service.logging.AppLogger
 import com.remodex.mobile.service.push.PushRegistrationPayload
@@ -600,7 +610,7 @@ class CodexService(
             "item/started",
             "codex/event/item_started" -> handleItemStartedNotification(params)
             "item/tool/requestUserInput" -> {
-                setStatus("User input required to continue tool execution.", notify = true, eventKind = ServiceEventKind.PERMISSION_REQUIRED)
+                handleStructuredUserInputRequest(params)
             }
             "error",
             "codex/event/error" -> handleTurnFailedNotification(params)
@@ -720,8 +730,9 @@ class CodexService(
                 threadId = threadId,
                 turnId = turnId,
                 type = "turnfailed",
-                role = com.remodex.mobile.model.TimelineRole.SYSTEM,
-                text = message
+                role = TimelineRole.SYSTEM,
+                text = message,
+                kind = TimelineEntryKind.CHAT
             )
             appendOrMergeTimelineEntry(entry = entry, append = false)
             updateThreadPreviewAndTimestamp(threadId = threadId, preview = message)
@@ -740,8 +751,9 @@ class CodexService(
             threadId = threadId,
             turnId = turnId,
             type = "assistantmessage",
-            role = com.remodex.mobile.model.TimelineRole.ASSISTANT,
-            text = text
+            role = TimelineRole.ASSISTANT,
+            text = text,
+            kind = TimelineEntryKind.CHAT
         )
         appendOrMergeTimelineEntry(entry = entry, append = true)
         updateThreadPreviewAndTimestamp(threadId = threadId, preview = text)
@@ -758,8 +770,10 @@ class CodexService(
             threadId = threadId,
             turnId = turnId,
             type = "usermessage",
-            role = com.remodex.mobile.model.TimelineRole.USER,
-            text = text
+            role = TimelineRole.USER,
+            text = text,
+            kind = TimelineEntryKind.CHAT,
+            deliveryState = TimelineDeliveryState.CONFIRMED
         )
         appendOrMergeTimelineEntry(entry = entry, append = false)
         updateThreadPreviewAndTimestamp(threadId = threadId, preview = text)
@@ -772,16 +786,21 @@ class CodexService(
     ) {
         val threadId = resolveThreadIdFromNotification(params) ?: return
         val turnId = params.string("turnId", "turn_id")
-        val text = extractNotificationText(params) ?: timelineFallbackText(type)
+        val normalizedType = normalizeNotificationType(type)
+        val text = extractNotificationText(params) ?: timelineFallbackText(normalizedType)
         val itemId = params.string("itemId", "item_id", "id")
             ?: "$type-${threadId}-${turnId ?: "unknown"}"
+        val kind = parser.resolveTimelineKind(normalizedType)
         val entry = TimelineEntry(
             id = itemId,
             threadId = threadId,
             turnId = turnId,
-            type = type,
-            role = com.remodex.mobile.model.TimelineRole.SYSTEM,
-            text = text
+            type = normalizedType,
+            role = TimelineRole.SYSTEM,
+            text = text,
+            kind = kind,
+            planState = if (kind == TimelineEntryKind.PLAN) parsePlanStateFromNotification(params) else null,
+            subagentAction = if (kind == TimelineEntryKind.SUBAGENT_ACTION) parseSubagentActionFromNotification(params) else null
         )
         appendOrMergeTimelineEntry(entry = entry, append = append)
         updateThreadPreviewAndTimestamp(threadId = threadId, preview = text)
@@ -859,9 +878,139 @@ class CodexService(
             "toolcall" -> "Tool output updated."
             "filechange" -> "File changes updated."
             "commandexecution" -> "Command output updated."
+            "collabagenttoolcall",
+            "collabtoolcall",
+            "spawnagent",
+            "waitagent",
+            "resumeagent",
+            "closeagent",
+            "sendinput" -> "Subagent activity updated."
             "diff" -> "Diff updated."
             else -> "Status updated."
         }
+    }
+
+    private fun parsePlanStateFromNotification(params: JsonObject): TimelinePlanState? {
+        val explanation = params.string("explanation", "summary", "title")
+            ?: (params["item"] as? JsonObject)?.string("explanation", "summary", "title")
+        val rawSteps = (params["steps"] as? JsonArray)
+            ?: ((params["item"] as? JsonObject)?.get("steps") as? JsonArray)
+        val steps = rawSteps?.mapNotNull { stepElement ->
+            val stepObject = stepElement as? JsonObject ?: return@mapNotNull null
+            val stepText = stepObject.string("step") ?: return@mapNotNull null
+            TimelinePlanStep(
+                id = stepObject.string("id") ?: "step-${stepText.hashCode()}",
+                step = stepText,
+                status = stepObject.string("status") ?: "pending"
+            )
+        }.orEmpty()
+        if (explanation.isNullOrBlank() && steps.isEmpty()) {
+            return null
+        }
+        return TimelinePlanState(explanation = explanation, steps = steps)
+    }
+
+    private fun parseSubagentActionFromNotification(params: JsonObject): TimelineSubagentAction? {
+        val payload = (params["item"] as? JsonObject) ?: params
+        val tool = payload.string("tool", "tool_name", "toolName", "name", "type")
+            ?: return null
+        val status = payload.string("status", "state") ?: "running"
+        val receiverIds = (payload["receiverThreadIds"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull?.trim()?.takeIf { value -> value.isNotEmpty() } }
+            .orEmpty()
+        val receiverAgents = (payload["receiverAgents"] as? JsonArray)
+            ?.mapNotNull { agentElement ->
+                val agentObject = agentElement as? JsonObject ?: return@mapNotNull null
+                val threadId = agentObject.string("threadId", "thread_id") ?: return@mapNotNull null
+                TimelineSubagentThreadPresentation(
+                    threadId = threadId,
+                    agentId = agentObject.string("agentId", "agent_id"),
+                    nickname = agentObject.string("nickname", "agentNickname", "agent_nickname"),
+                    role = agentObject.string("role", "agentRole", "agent_role"),
+                    model = agentObject.string("model"),
+                    fallbackStatus = agentObject.string("status", "state"),
+                    fallbackMessage = agentObject.string("message")
+                )
+            }
+            .orEmpty()
+
+        val agents = if (receiverAgents.isNotEmpty()) {
+            receiverAgents
+        } else {
+            receiverIds.map { threadId ->
+                TimelineSubagentThreadPresentation(
+                    threadId = threadId,
+                    agentId = null,
+                    nickname = null,
+                    role = null,
+                    model = null,
+                    fallbackStatus = null,
+                    fallbackMessage = null
+                )
+            }
+        }
+
+        return TimelineSubagentAction(
+            tool = tool,
+            status = status,
+            prompt = payload.string("prompt", "message"),
+            model = payload.string("model"),
+            agents = agents
+        )
+    }
+
+    private fun handleStructuredUserInputRequest(params: JsonObject) {
+        val threadId = resolveThreadIdFromNotification(params) ?: _selectedThreadId.value ?: return
+        val request = parseStructuredUserInputRequest(params)
+        val requestId = request?.requestId ?: "request-user-input-${System.currentTimeMillis()}"
+        val summaryText = request?.questions?.firstOrNull()?.question
+            ?: "User input required to continue tool execution."
+        val entry = TimelineEntry(
+            id = "request-user-input-$requestId",
+            threadId = threadId,
+            turnId = params.string("turnId", "turn_id"),
+            type = "requestuserinput",
+            role = TimelineRole.SYSTEM,
+            text = summaryText,
+            kind = TimelineEntryKind.USER_INPUT_PROMPT,
+            structuredUserInputRequest = request
+        )
+        appendOrMergeTimelineEntry(entry, append = false)
+        setStatus(
+            "User input required to continue tool execution.",
+            notify = true,
+            eventKind = ServiceEventKind.PERMISSION_REQUIRED
+        )
+    }
+
+    private fun parseStructuredUserInputRequest(params: JsonObject): TimelineStructuredUserInputRequest? {
+        val requestId = params.string("requestId", "request_id", "id")
+            ?: (params["requestId"] as? JsonPrimitive)?.contentOrNull
+            ?: return null
+        val questionsArray = (params["questions"] as? JsonArray) ?: return null
+        val questions = questionsArray.mapNotNull questionsMap@{ questionElement ->
+            val questionObject = questionElement as? JsonObject ?: return@questionsMap null
+            val questionId = questionObject.string("id") ?: return@questionsMap null
+            val optionsArray = (questionObject["options"] as? JsonArray).orEmpty()
+            val options = optionsArray.mapNotNull optionsMap@{ optionElement ->
+                val optionObject = optionElement as? JsonObject ?: return@optionsMap null
+                val label = optionObject.string("label") ?: return@optionsMap null
+                TimelineStructuredInputOption(
+                    id = optionObject.string("id") ?: "opt-${label.hashCode()}",
+                    label = label,
+                    description = optionObject.string("description") ?: ""
+                )
+            }
+            TimelineStructuredInputQuestion(
+                id = questionId,
+                header = questionObject.string("header") ?: "",
+                question = questionObject.string("question") ?: "",
+                isOther = questionObject.bool("isOther", "is_other") ?: false,
+                isSecret = questionObject.bool("isSecret", "is_secret") ?: false,
+                options = options
+            )
+        }
+        return TimelineStructuredUserInputRequest(requestId = requestId, questions = questions)
     }
 
     private fun appendOrMergeTimelineEntry(entry: TimelineEntry, append: Boolean) {
@@ -871,11 +1020,18 @@ class CodexService(
             existingTimeline.toMutableList().also { items ->
                 val existing = items[existingIndex]
                 items[existingIndex] = existing.copy(
-                    text = if (append) existing.text + entry.text else entry.text
+                    text = if (append) existing.text + entry.text else entry.text,
+                    type = entry.type,
+                    kind = entry.kind,
+                    deliveryState = entry.deliveryState,
+                    commandExecution = entry.commandExecution ?: existing.commandExecution,
+                    planState = entry.planState ?: existing.planState,
+                    subagentAction = entry.subagentAction ?: existing.subagentAction,
+                    structuredUserInputRequest = entry.structuredUserInputRequest ?: existing.structuredUserInputRequest
                 )
             }
         } else {
-            existingTimeline + entry
+            (existingTimeline + entry).sortedBy { it.orderIndex }
         }
         timelineByThread[entry.threadId] = updatedTimeline
         if (_selectedThreadId.value == entry.threadId) {
