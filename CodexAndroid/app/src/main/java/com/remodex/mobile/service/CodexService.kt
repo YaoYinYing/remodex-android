@@ -18,6 +18,18 @@ import com.remodex.mobile.model.normalizeFilesystemProjectPath
 import com.remodex.mobile.service.logging.AppLogger
 import com.remodex.mobile.service.push.PushRegistrationPayload
 import com.remodex.mobile.service.secure.CodexSecureTransport
+import com.remodex.mobile.service.delegates.CodexConnectionDelegate
+import com.remodex.mobile.service.delegates.CodexGitAccountDelegate
+import com.remodex.mobile.service.delegates.CodexIncomingDelegate
+import com.remodex.mobile.service.delegates.CodexNotificationDelegate
+import com.remodex.mobile.service.delegates.CodexRuntimeDelegate
+import com.remodex.mobile.service.delegates.CodexThreadTurnDelegate
+import com.remodex.mobile.service.delegates.DefaultCodexConnectionDelegate
+import com.remodex.mobile.service.delegates.DefaultCodexGitAccountDelegate
+import com.remodex.mobile.service.delegates.DefaultCodexIncomingDelegate
+import com.remodex.mobile.service.delegates.DefaultCodexNotificationDelegate
+import com.remodex.mobile.service.delegates.DefaultCodexRuntimeDelegate
+import com.remodex.mobile.service.delegates.DefaultCodexThreadTurnDelegate
 import com.remodex.mobile.service.transport.FixtureRpcTransport
 import com.remodex.mobile.service.transport.RealSecureRelayRpcTransport
 import com.remodex.mobile.service.transport.RpcTransport
@@ -150,6 +162,14 @@ class CodexService(
         FIXTURE,
         LIVE
     }
+
+    // Internal subsystem split points for module-replacement refactor.
+    internal val connectionDelegate: CodexConnectionDelegate by lazy { DefaultCodexConnectionDelegate(this) }
+    internal val runtimeDelegate: CodexRuntimeDelegate by lazy { DefaultCodexRuntimeDelegate(this) }
+    internal val incomingDelegate: CodexIncomingDelegate by lazy { DefaultCodexIncomingDelegate(this) }
+    internal val threadTurnDelegate: CodexThreadTurnDelegate by lazy { DefaultCodexThreadTurnDelegate(this) }
+    internal val gitAccountDelegate: CodexGitAccountDelegate by lazy { DefaultCodexGitAccountDelegate(this) }
+    internal val notificationDelegate: CodexNotificationDelegate by lazy { DefaultCodexNotificationDelegate(this) }
 
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState

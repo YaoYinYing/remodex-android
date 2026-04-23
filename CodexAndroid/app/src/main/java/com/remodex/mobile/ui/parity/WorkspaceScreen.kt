@@ -288,7 +288,7 @@ fun WorkspaceScreen(
                     onStartThread = { projectHint ->
                         scope.launch {
                             drawerState.close()
-                            runCatching { actions.startThread(preferredProjectPath = projectHint) }
+                            runCatching { actions.startThread(projectPath = projectHint) }
                         }
                     },
                     rateLimitInfo = rateLimitInfo,
@@ -359,7 +359,7 @@ fun WorkspaceScreen(
                                 onOpenPairing()
                             }
                         },
-                        onStartThread = { scope.launch { actions.startThread() } }
+                        onStartThread = { scope.launch { actions.startThread(projectPath = null) } }
                     )
                 } else {
                     WorkspaceStatusStrip(

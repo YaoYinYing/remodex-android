@@ -5,9 +5,13 @@ import com.remodex.mobile.service.FileAutocompleteMatch
 import com.remodex.mobile.service.ReviewTarget
 import com.remodex.mobile.service.SkillSuggestion
 import com.remodex.mobile.service.TurnImageAttachment
+import com.remodex.mobile.ui.contracts.ComposerActions
+import com.remodex.mobile.ui.contracts.SettingsActions
+import com.remodex.mobile.ui.contracts.SidebarActions
+import com.remodex.mobile.ui.contracts.TimelineActions
 
-interface WorkspaceActionHandler {
-    suspend fun refreshThreads()
+interface WorkspaceActionHandler : SidebarActions, TimelineActions, ComposerActions, SettingsActions {
+    override suspend fun refreshThreads()
     suspend fun refreshActiveThreadTimeline()
     suspend fun refreshGitStatus()
     suspend fun refreshRateLimitInfo()
@@ -15,26 +19,37 @@ interface WorkspaceActionHandler {
     suspend fun fuzzyFileSearch(query: String, roots: List<String>, limit: Int): List<FileAutocompleteMatch>
     suspend fun listSkills(cwds: List<String>, forceReload: Boolean, limit: Int): List<SkillSuggestion>
     suspend fun sendTurnStart(inputText: String, attachments: List<TurnImageAttachment>)
-    suspend fun openThread(threadId: String)
-    suspend fun startThread(preferredProjectPath: String? = null)
+    override suspend fun openThread(threadId: String)
+    override suspend fun startThread(projectPath: String?)
     suspend fun forceRefreshWorkspace()
     suspend fun gitDiff(): String
     suspend fun gitCommitAndPush(message: String?)
     suspend fun gitPull()
     suspend fun gitPush()
-    suspend fun archiveThread(threadId: String)
-    suspend fun unarchiveThread(threadId: String)
+    override suspend fun archiveThread(threadId: String)
+    override suspend fun unarchiveThread(threadId: String)
     suspend fun deleteThreadLocally(threadId: String)
     suspend fun archiveThreadGroup(threadIds: List<String>)
     suspend fun renameThread(threadId: String, title: String)
-    suspend fun disconnect()
+    override suspend fun disconnect()
     suspend fun checkoutGitBranch(branch: String)
     suspend fun grantPermission(id: String, allow: Boolean)
     suspend fun threadFork(targetProjectPath: String? = null)
-    suspend fun interruptActiveTurn()
+    override suspend fun interruptActiveTurn()
     suspend fun reconnect()
     fun currentPairingMacDeviceId(): String?
     fun isThreadRunning(threadId: String?): Boolean
+    override fun updateInput(input: String) = Unit
+    override suspend fun send() = Unit
+    override suspend fun stop() = interruptActiveTurn()
+    override fun switchModel(model: String) = Unit
+    override fun switchReasoningEffort(effort: String) = Unit
+    override fun setSearchQuery(query: String) = Unit
+    override fun setToneMode(mode: String) = Unit
+    override fun setFontStyle(style: String) = Unit
+    override fun setLoggerLevel(level: String) = Unit
+    override fun setLoggerMaxLines(maxLines: Int) = Unit
+    override suspend fun refreshActiveTimeline() = refreshActiveThreadTimeline()
 }
 
 class ServiceWorkspaceActionHandler(
@@ -76,8 +91,8 @@ class ServiceWorkspaceActionHandler(
         service.openThread(threadId)
     }
 
-    override suspend fun startThread(preferredProjectPath: String?) {
-        service.startThread(preferredProjectPath = preferredProjectPath)
+    override suspend fun startThread(projectPath: String?) {
+        service.startThread(preferredProjectPath = projectPath)
     }
 
     override suspend fun forceRefreshWorkspace() {

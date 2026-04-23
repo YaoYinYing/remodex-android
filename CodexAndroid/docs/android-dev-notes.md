@@ -128,3 +128,13 @@ bash ./run-local-remodex.sh --hostname 192.168.31.138 --port 9000
 - Do not move protocol decisions into Compose views.
 - Do not hardcode production/hosted endpoints.
 - Do not regress local relay recovery just to simplify reconnect logic.
+
+## Invariants Ledger
+
+- I-001 Local-first pairing and reconnect: saved pairing is the source of truth; scanner/manual path must not race auto-reconnect.
+- I-002 Turn start fallback matrix: `on-request|onRequest + sandboxPolicy.workspaceWrite` -> `never + dangerFullAccess` -> legacy `sandbox` -> minimal payload.
+- I-003 Item-aware timeline merge: reducer merges by item identity and kind; no flattening or duplicate noisy rows for deltas.
+- I-004 Desktop refresh stability: phone-originated sends must not trigger route dancing; refresh trace must not contain `route_dance_detected` in acceptance window.
+- I-005 Repo-scoped git/CI visibility: git and CI actions/status are valid only for repo-bound selected thread context.
+- I-006 Theme/system bar consistency: scanner/workspace/settings top bars and system bars must follow app theme and safe-inset rendering.
+- I-007 Send idempotency and draft safety: in-flight send dedupe required; drafts/attachments are preserved on send failure and only cleared after confirmed dispatch.
