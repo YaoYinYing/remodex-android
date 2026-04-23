@@ -1496,14 +1496,17 @@ class CodexService(
                 put("model", JsonPrimitive(normalizedModel))
             }
         }
-        val responsePair = requestFirstAvailable(
-            methods = listOf("thread/resume"),
-            params = JsonObject(params)
-        ) ?: run {
+        val response = requestRpcWithRuntimeFallback(
+            method = "thread/resume",
+            baseParams = JsonObject(params)
+        )
+        val rpcError = response.error
+        if (rpcError != null && isMethodUnavailableError(rpcError)) {
             resumedThreadIds.add(normalizedThreadId)
             return
         }
-        val resumedThread = (responsePair.second.result as? JsonObject)?.let { result ->
+        throwIfRpcError(response, "thread/resume")
+        val resumedThread = (response.result as? JsonObject)?.let { result ->
             (result["thread"] as? JsonObject)?.let(parser::parseThreadSummaryObject)
         }
         if (resumedThread != null) {
@@ -1521,9 +1524,9 @@ class CodexService(
         normalizedFileMentions: List<String>
     ): RpcMessage {
         var imageUrlKey = "url"
-        var response = requestRpc(
+        var response = requestRpcWithRuntimeFallback(
             method = "turn/start",
-            params = buildTurnStartParams(
+            baseParams = buildTurnStartParams(
                 threadId = threadId,
                 normalizedInput = normalizedInput,
                 imageUrlKey = imageUrlKey,
@@ -1538,9 +1541,9 @@ class CodexService(
             && shouldRetryTurnStartWithImageUrlField(initialRpcError)
         ) {
             imageUrlKey = "image_url"
-            response = requestRpc(
+            response = requestRpcWithRuntimeFallback(
                 method = "turn/start",
-                params = buildTurnStartParams(
+                baseParams = buildTurnStartParams(
                     threadId = threadId,
                     normalizedInput = normalizedInput,
                     imageUrlKey = imageUrlKey,
@@ -1552,6 +1555,133 @@ class CodexService(
         }
         throwIfRpcError(response, "turn/start")
         return response
+    }
+
+    private suspend fun requestRpcWithRuntimeFallback(
+        method: String,
+        baseParams: JsonObject
+    ): RpcMessage {
+        data class RuntimePolicyProfile(
+            val approvalPolicy: String,
+            val sandboxPolicyType: String,
+            val sandboxLegacyValue: String,
+            val includeNetworkAccess: Boolean
+        )
+
+        val policyCandidates = listOf(
+            RuntimePolicyProfile(
+                approvalPolicy = "never",
+                sandboxPolicyType = "dangerFullAccess",
+                sandboxLegacyValue = "danger-full-access",
+                includeNetworkAccess = false
+            ),
+            RuntimePolicyProfile(
+                approvalPolicy = "on-request",
+                sandboxPolicyType = "workspaceWrite",
+                sandboxLegacyValue = "workspace-write",
+                includeNetworkAccess = true
+            ),
+            RuntimePolicyProfile(
+                approvalPolicy = "onRequest",
+                sandboxPolicyType = "workspaceWrite",
+                sandboxLegacyValue = "workspace-write",
+                includeNetworkAccess = true
+            )
+        )
+        var lastErrorResponse: RpcMessage? = null
+
+        for (policy in policyCandidates) {
+            val sandboxPolicyMap = mutableMapOf<String, kotlinx.serialization.json.JsonElement>(
+                "type" to JsonPrimitive(policy.sandboxPolicyType)
+            )
+            if (policy.includeNetworkAccess) {
+                sandboxPolicyMap["networkAccess"] = JsonPrimitive(true)
+            }
+            val sandboxPolicy = JsonObject(sandboxPolicyMap)
+            val firstAttemptParams = JsonObject(
+                baseParams.toMutableMap().apply {
+                    put("approvalPolicy", JsonPrimitive(policy.approvalPolicy))
+                    put("sandboxPolicy", sandboxPolicy)
+                }
+            )
+            val firstResponse = requestRpc(method = method, params = firstAttemptParams)
+            val firstError = firstResponse.error
+            if (firstError == null) {
+                return firstResponse
+            }
+            lastErrorResponse = firstResponse
+            if (!shouldRetryWithApprovalPolicyFallback(firstError)
+                && !shouldFallbackFromSandboxPolicy(firstError)
+            ) {
+                return firstResponse
+            }
+
+            val secondAttemptParams = JsonObject(
+                baseParams.toMutableMap().apply {
+                    put("approvalPolicy", JsonPrimitive(policy.approvalPolicy))
+                    put("sandbox", JsonPrimitive(policy.sandboxLegacyValue))
+                }
+            )
+            val secondResponse = requestRpc(method = method, params = secondAttemptParams)
+            val secondError = secondResponse.error
+            if (secondError == null) {
+                return secondResponse
+            }
+            lastErrorResponse = secondResponse
+            if (!shouldRetryWithApprovalPolicyFallback(secondError)
+                && !shouldFallbackFromSandboxPolicy(secondError)
+            ) {
+                return secondResponse
+            }
+
+            val finalAttemptParams = JsonObject(
+                baseParams.toMutableMap().apply {
+                    put("approvalPolicy", JsonPrimitive(policy.approvalPolicy))
+                }
+            )
+            val finalResponse = requestRpc(method = method, params = finalAttemptParams)
+            val finalError = finalResponse.error
+            if (finalError == null) {
+                return finalResponse
+            }
+            lastErrorResponse = finalResponse
+            if (!shouldRetryWithApprovalPolicyFallback(finalError)) {
+                return finalResponse
+            }
+        }
+
+        return lastErrorResponse ?: requestRpc(method = method, params = baseParams)
+    }
+
+    private fun shouldRetryWithApprovalPolicyFallback(rpcError: RpcError): Boolean {
+        if (rpcError.code != -32600 && rpcError.code != -32602) {
+            return false
+        }
+        val message = rpcError.message.lowercase()
+        return message.contains("approval")
+            && (
+                message.contains("invalid")
+                    || message.contains("unknown")
+                    || message.contains("unexpected")
+                    || message.contains("unsupported")
+                    || message.contains("field")
+                )
+    }
+
+    private fun shouldFallbackFromSandboxPolicy(rpcError: RpcError): Boolean {
+        if (rpcError.code != -32600 && rpcError.code != -32602) {
+            return false
+        }
+        val message = rpcError.message.lowercase()
+        if (message.contains("thread not found") || message.contains("unknown thread")) {
+            return false
+        }
+        return message.contains("sandbox")
+            || message.contains("invalid params")
+            || message.contains("unknown field")
+            || message.contains("unexpected field")
+            || message.contains("unsupported")
+            || message.contains("failed to parse")
     }
 
     private suspend fun handleTurnStartSuccess(

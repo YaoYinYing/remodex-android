@@ -81,6 +81,12 @@ bash ./run-local-remodex.sh --hostname 192.168.31.138 --port 9000
 ## Composer and conversation behavior
 
 - Model selection is local runtime state and should be injected into `turn/start`; do not depend on a dedicated model-switch RPC.
+- Keep `turn/start` and `thread/resume` runtime-compat fallback aligned with iOS:
+  - try `approvalPolicy=never` + `sandboxPolicy.type=dangerFullAccess`
+  - then `approvalPolicy=on-request|onRequest` + `sandboxPolicy.type=workspaceWrite`
+  - then legacy `sandbox` strings
+  - then minimal payload
+  This avoids phone-originated sends being accepted but stuck in a non-executing desktop runtime mode.
 - Keep send feedback explicit. Use an in-flight send state so duplicate taps do not create duplicate turns.
 - If Android dispatches but Codex desktop does not react, separate the problem:
   - transport/send path
