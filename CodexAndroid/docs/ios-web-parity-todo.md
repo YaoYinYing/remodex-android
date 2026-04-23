@@ -33,7 +33,7 @@ Completion rule:
 | T-19 | Composer host/state refactor to iOS structure | `TurnComposerHostView.swift`, `TurnComposerViewState.swift` | module split + tests | TODO |
 | T-20 | Composer autocomplete parity (`@files/$skills//commands`) | `FileAutocompletePanel.swift`, `SkillAutocompletePanel.swift`, `SlashCommandAutocompletePanel.swift` | instrumentation | TODO |
 | T-21 | Queued drafts parity | `QueuedDraftsPanel.swift` | unit + instrumentation | TODO |
-| T-22 | Send/stop runtime semantics parity | `TurnViewModel.swift` | unit + live ADB | TODO |
+| T-22 | Send/stop runtime semantics parity | `TurnViewModel.swift` | unit + live ADB | IN_PROGRESS |
 | T-23 | Runtime controls parity (model/reasoning/access/service tier where supported) | `CodexService+RuntimeConfig.swift` | unit + instrumentation | TODO |
 | T-24 | Attachment/camera/gallery/voice pipeline parity | iOS turn attachment pipeline | instrumentation + live ADB | TODO |
 | T-25 | Thread lifecycle parity (`thread/start/resume/fork`) | `CodexService+ThreadsTurns.swift`, `CodexService+ThreadFork.swift` | unit + live ADB | TODO |
@@ -44,8 +44,8 @@ Completion rule:
 | T-30 | Review/worktree/git toolbar parity | `TurnToolbarContent.swift`, `TurnGitActionsToolbar.swift` | instrumentation + live ADB | TODO |
 | T-31 | Git/CI visibility strictly thread-repo scoped | local-first guardrail | unit + UI assertions | TODO |
 | T-32 | Preserve local relay + bridge-managed account/rate-limit as primary truth | local-first guardrail | live ADB + settings checks | TODO |
-| T-33 | Desktop sync stability for phone-originated sends | bridge refresher behavior | live ADB + refresh trace | TODO |
-| T-34 | No refresh-route dancing regressions | bridge refresher behavior | trace assertions | TODO |
+| T-33 | Desktop sync stability for phone-originated sends | bridge refresher behavior | live ADB + refresh trace | IN_PROGRESS |
+| T-34 | No refresh-route dancing regressions | bridge refresher behavior | trace assertions | DONE |
 | T-35 | Scanner/workspace/settings status bar theme parity | UX parity requirement | screenshots | TODO |
 | T-36 | Settings section order/content parity | `SettingsView.swift` | screenshot + instrumentation | TODO |
 | T-37 | Settings dark mode contrast parity | `SettingsView.swift` | screenshot review | TODO |
@@ -57,8 +57,8 @@ Completion rule:
 | T-43 | Keep mock transport deterministic for CI | CI policy | stable test runs | TODO |
 | T-44 | Stabilize emulator boot workflow (no adb offline dead loop) | CI reliability | green CI job logs | TODO |
 | T-45 | ABI artifact outputs preserved (`arm64-v8a`, `x86_64`, `<version>+<sha6>`) | release policy | CI artifacts | TODO |
-| T-46 | Update Android dev notes with durable refactor constraints | continuity policy | docs update | TODO |
-| T-47 | Live ADB acceptance on `192.168.31.185:42567` | manual acceptance | runbook logs/screenshots | TODO |
+| T-46 | Update Android dev notes with durable refactor constraints | continuity policy | docs update | DONE |
+| T-47 | Live ADB acceptance on `192.168.31.185:42567` | manual acceptance | runbook logs/screenshots | IN_PROGRESS |
 | T-48 | End-to-end desktop response and actionable code-change flow from Android send | product bugfix gate | live local relay test evidence | TODO |
 
 ## Current Iteration Evidence
@@ -67,10 +67,17 @@ Completion rule:
 - `RpcTransportParser` upgraded to emit typed kinds and parse command/plan/subagent metadata.
 - `CodexService` notification reducer upgraded for typed entries and structured-user-input row creation.
 - Parser unit tests extended for kind decoding and command/plan metadata.
+- Workspace refresh loop refactored from perpetual 4-second polling to one-shot hydration on connect/thread change to reduce desktop refresh churn.
+- Composer dispatch now preserves draft/attachments on send failure and only clears after successful `turn/start`.
+- `turn/start` runtime fallback order updated to iOS-aligned priority (`on-request|onRequest` workspace write before `never` full-access fallback).
+- Post-`turn/start` success now performs lightweight thread-list reconciliation to keep desktop-visible thread state fresher.
+- Live local pairing test passed on `192.168.31.185:42567` with refresh-trace monitor: no `route_dance_detected`.
 
 ## Validation Commands
 
 - `./gradlew -g /Users/yyy/.gradle :app:compileDebugKotlin`
 - `./gradlew -g /Users/yyy/.gradle :app:testDebugUnitTest --tests com.remodex.mobile.service.transport.RpcTransportParserTest`
 - `./gradlew -g /Users/yyy/.gradle :app:installDebug`
+- `ifconfig en0`
 - `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:42567 --skip-build --wait-seconds 80`
+- `bash CodexAndroid/scripts/live_local_pairing_test.sh --hostname 192.168.31.138 --port 9100 --device 192.168.31.185:42567 --skip-build --wait-seconds 90 --monitor-refresh-seconds 20`

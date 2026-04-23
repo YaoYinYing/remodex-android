@@ -1726,12 +1726,6 @@ class CodexService(
 
         val policyCandidates = listOf(
             RuntimePolicyProfile(
-                approvalPolicy = "never",
-                sandboxPolicyType = "dangerFullAccess",
-                sandboxLegacyValue = "danger-full-access",
-                includeNetworkAccess = false
-            ),
-            RuntimePolicyProfile(
                 approvalPolicy = "on-request",
                 sandboxPolicyType = "workspaceWrite",
                 sandboxLegacyValue = "workspace-write",
@@ -1742,6 +1736,12 @@ class CodexService(
                 sandboxPolicyType = "workspaceWrite",
                 sandboxLegacyValue = "workspace-write",
                 includeNetworkAccess = true
+            ),
+            RuntimePolicyProfile(
+                approvalPolicy = "never",
+                sandboxPolicyType = "dangerFullAccess",
+                sandboxLegacyValue = "danger-full-access",
+                includeNetworkAccess = false
             )
         )
         var lastErrorResponse: RpcMessage? = null
@@ -1864,6 +1864,14 @@ class CodexService(
                 AppLogger.warn(
                     LOG_TAG,
                     "turn/start succeeded but timeline refresh failed for thread=$threadId.",
+                    error
+                )
+            }
+        runCatching { refreshThreads(silentStatus = true, includeTimeline = false) }
+            .onFailure { error ->
+                AppLogger.warn(
+                    LOG_TAG,
+                    "turn/start succeeded but thread list refresh failed for thread=$threadId.",
                     error
                 )
             }

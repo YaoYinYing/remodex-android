@@ -81,8 +81,6 @@ import com.remodex.mobile.service.ReviewTarget
 import com.remodex.mobile.service.SkillSuggestion
 import com.remodex.mobile.service.TurnImageAttachment
 import java.io.ByteArrayOutputStream
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val MAX_COMPOSER_ATTACHMENTS = 4
@@ -193,14 +191,14 @@ fun WorkspaceScreen(
         }
     }
 
-    LaunchedEffect(isConnected) {
+    LaunchedEffect(isConnected, selectedThreadId) {
         if (!isConnected) return@LaunchedEffect
-        while (isActive) {
-            delay(4_000L)
-            runCatching { service.refreshThreads(silentStatus = true, includeTimeline = false) }
-            runCatching { service.refreshActiveThreadTimeline(silentStatus = true) }
-            runCatching { service.refreshGitStatus(silentStatus = true) }
-            runCatching { service.refreshRateLimitInfo(silentStatus = true) }
+        runCatching { service.refreshThreads(silentStatus = true, includeTimeline = false) }
+        runCatching { service.refreshActiveThreadTimeline(silentStatus = true) }
+        runCatching { service.refreshGitStatus(silentStatus = true) }
+        runCatching { service.refreshRateLimitInfo(silentStatus = true) }
+        if (!selectedThreadId.isNullOrBlank()) {
+            runCatching { service.reconcileThreadRunningState(selectedThreadId) }
         }
     }
 
@@ -259,9 +257,14 @@ fun WorkspaceScreen(
             return
         }
         isDispatching = true
+        val pendingText = text
+        val pendingAttachments = mediaAttachments.toList()
         scope.launch {
-            runCatching { service.sendTurnStart(text, attachments = mediaAttachments.toList()) }
-            clearComposer()
+            runCatching { service.sendTurnStart(pendingText, attachments = pendingAttachments) }
+                .onSuccess { clearComposer() }
+                .onFailure { error ->
+                    attachmentHint = error.message?.takeIf { it.isNotBlank() } ?: "Send failed. Check connection logs."
+                }
             isDispatching = false
         }
     }
@@ -426,7 +429,7 @@ fun WorkspaceScreen(
                 showReviewTargets = showReviewTargets,
                 showForkTargets = showForkTargets,
                 isDispatching = isDispatching,
-                isRunning = selectedThreadId != null && timeline.lastOrNull()?.turnId != null,
+                isRunning = selectedThreadId != null && service.isThreadRunning(selectedThreadId),
                 onQueuePausedChange = { queuePaused = it },
                 onSwitchModel = onSwitchModel,
                 onSwitchReasoningEffort = onSwitchReasoningEffort,
